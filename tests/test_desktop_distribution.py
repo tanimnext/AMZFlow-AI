@@ -7,6 +7,16 @@ from pathlib import Path
 
 
 class DesktopDistributionTests(unittest.TestCase):
+    def test_checksum_file_always_uses_portable_lf_newline(self):
+        from scripts.build_dist import write_checksum
+
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "portable.zip"
+            archive.write_bytes(b"release")
+            checksum = write_checksum(archive)
+            self.assertTrue(checksum.read_bytes().endswith(b"  portable.zip\n"))
+            self.assertNotIn(b"\r", checksum.read_bytes())
+
     def test_remote_release_command_defaults_to_windows(self):
         from scripts.remote_release import workflow_dispatch_args
 

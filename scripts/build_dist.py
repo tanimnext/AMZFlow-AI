@@ -45,6 +45,18 @@ def copy_model_snapshot(snapshot: Path, destination: Path) -> Path:
     return destination
 
 
+def write_checksum(archive: Path) -> Path:
+    digest = hashlib.sha256()
+    with archive.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    checksum = archive.with_suffix(f"{archive.suffix}.sha256")
+    # write_text() translates LF to CRLF on Windows. A byte write keeps the
+    # checksum compatible with shasum on Windows, macOS, and Linux.
+    checksum.write_bytes(f"{digest.hexdigest()}  {archive.name}\n".encode("ascii"))
+    return checksum
+
+
 def _stage_kokoro_model(destination: Path) -> Path:
     from huggingface_hub import snapshot_download
 
@@ -166,10 +178,7 @@ def build(release_version: str, repository: str, ffmpeg_dir: Path | None) -> Pat
         shutil.copy2(updater, wrapper / updater.name)
 
     archive = Path(shutil.make_archive(str(release_root / base), "zip", release_root, base))
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    archive.with_suffix(f"{archive.suffix}.sha256").write_text(
-        f"{digest}  {archive.name}\n", encoding="ascii"
-    )
+    write_checksum(archive)
     shutil.rmtree(wrapper, ignore_errors=True)
     return archive
 
