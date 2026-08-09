@@ -1,0 +1,84 @@
+name: Release portable desktop apps
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version (for example 7.1.0)"
+        required: true
+        type: string
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            release_version="${{ inputs.version }}"
+          else
+            release_version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "value=${release_version}" >> "$GITHUB_OUTPUT"
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg --no-progress -y
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - run: python -m pip install -r requirements-build.txt
+      - name: Build portable ZIP
+        run: python scripts/build_dist.py --version "${{ steps.version.outputs.value }}" --github-repository "${{ github.repository }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ runner.os }}
+          path: |
+            release/*.zip
+            release/*.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: portable-*
+          path: release
+          merge-multiple: true
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            release_version="${{ inputs.version }}"
+          else
+            release_version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "value=${release_version}" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "v${{ steps.version.outputs.value }}" release/*
+          --target "${{ github.sha }}"
+          --title "AmzFlow AI v${{ steps.version.outputs.value }}"
+          --generate-notes

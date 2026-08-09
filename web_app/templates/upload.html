@@ -1,0 +1,1484 @@
+{% extends "base.html" %}
+{% block title %}YouTube Studio · {{ brand.name }}{% endblock %}
+
+{% block head_extra %}
+<style>
+    .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 20px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
+    .btn-brand { background: linear-gradient(90deg, var(--brand-500) 0%, var(--brand-600) 100%); color: #fff; }
+    .btn-brand:hover { filter: brightness(1.05); }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .bg-ok { background-color: var(--ok-500); box-shadow: 0 0 8px var(--ok-500); }
+    .bg-error { background-color: var(--danger-500); box-shadow: 0 0 8px var(--danger-500); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between gap-3 mb-5 flex-wrap">
+    <div>
+        <h1 class="text-[22px] font-extrabold" style="color:var(--text)">YouTube Studio</h1>
+        <p class="text-[13px]" style="color:var(--text-faint)">Publish, schedule, and edit metadata &amp; thumbnails for every generated video.</p>
+    </div>
+    <div id="authStatusHeader" class="flex-wrap items-center gap-2 text-[11px] font-bold" style="color:var(--ok-700);display:none">
+        <span class="dot dot-ok"></span>
+        <span id="authenticatedAsText">Authenticated</span>
+        <button type="button" onclick="logoutYouTube()" class="btn btn-ghost btn-icon" style="width:22px;height:22px;padding:0" title="Logout" aria-label="Logout YouTube account">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+        </button>
+    </div>
+    <p id="channelNameDisplay" class="text-[11px] font-bold" style="color:var(--danger-600)"></p>
+</div>
+
+            <div id="videoList" class="space-y-4">
+            <div class="glass p-12 text-center text-slate-500">
+                <div class="animate-spin w-10 h-10 border-4 border-red-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+                <p>Loading your masterpiece collection...</p>
+            </div>
+        </div>
+
+        <div id="bulkControls" class="mt-8 glass p-6 hidden">
+            <div class="flex flex-wrap items-center justify-between gap-6">
+                <div class="flex flex-wrap items-center gap-6">
+                    <h3 class="font-bold text-xl text-slate-900">Bulk Publish</h3>
+                    <div class="flex flex-wrap gap-4 items-center">
+                        <select id="globalPlaylist" class="min-w-[200px]"></select>
+                        <select id="globalPrivacy" onchange="toggleSchedule('global')">
+                            <option value="unlisted" selected>Unlisted</option>
+                            <option value="public">Public</option>
+                            <option value="private">Private</option>
+                            <option value="scheduled">Scheduled</option>
+                        </select>
+                        <div id="advancedSchedule" class="hidden modal-flex flex-wrap gap-4 items-center bg-slate-50 p-3 rounded-xl border border-slate-200 mt-2 md:mt-0">
+                            <div class="flex flex-col">
+                                <label class="text-[9px] text-slate-500 font-bold uppercase mb-1">Start Date & Time</label>
+                                <input type="datetime-local" id="globalSchedule" class="text-xs !bg-transparent !p-1">
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-[9px] text-slate-500 font-bold uppercase mb-1">End Date & Time</label>
+                                <input type="datetime-local" id="globalEndTime" class="text-xs !bg-transparent !p-1">
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-[9px] text-slate-500 font-bold uppercase mb-1">Videos Per Day</label>
+                                <input type="number" id="vidsPerDay" value="3" min="1" max="24" class="w-16 text-xs !bg-transparent !p-1">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex gap-4">
+                    <button id="deleteAllBtn" onclick="deleteAllUploaded()" class="hidden bg-red-600/20 border border-red-500/50 text-red-400 px-6 py-4 rounded-2xl font-bold hover:bg-red-600/30 transition">
+                        DELETE ALL UPLOADED
+                    </button>
+                    <button onclick="uploadAll()" class="btn-brand px-12 py-4 rounded-2xl font-black text-lg shadow-2xl shadow-red-500/40 active:scale-95 transition">
+                        START UPLOAD ALL
+                    </button>
+                </div>
+            </div>
+        </div>
+    <div id="authModal" class="fixed inset-0 bg-black/90 backdrop-blur-md hidden modal-flex items-center justify-center z-50 p-4">
+        <div class="glass max-w-md w-full p-10 text-center border border-red-500/30">
+            <div class="w-20 h-20 bg-red-600/20 rounded-full flex items-center justify-center mx-auto mb-6">
+                <svg class="w-10 h-10 text-red-500" fill="currentColor" viewBox="0 0 24 24"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+            </div>
+            <h2 class="text-3xl font-black mb-4">Auth Required</h2>
+            <p class="text-slate-500 mb-8">Please authenticate with your YouTube account to access the publishing studio.</p>
+            <button onclick="authenticate(event)" class="w-full btn-brand py-4 rounded-xl font-bold text-xl shadow-xl shadow-red-600/30 active:scale-95 transition">
+                Authenticate Now
+            </button>
+        </div>
+    </div>
+
+    <div id="modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden modal-flex items-center justify-center p-4 z-[60]">
+        <div class="glass max-w-lg w-full p-8 text-center border border-slate-200">
+            <div id="modalIcon"></div>
+            <h2 id="modalTitle" class="text-2xl font-bold mb-2"></h2>
+            <p id="modalMsg" class="text-slate-500 mb-6 break-words"></p>
+            <div id="modalButtons" class="flex gap-4 justify-center">
+                <button id="modalConfirmBtn" class="hidden px-10 py-3 btn-brand rounded-xl font-semibold active:scale-95 transition">Confirm</button>
+                <button onclick="closeModal()" class="px-10 py-3 bg-slate-100 rounded-xl font-semibold hover:bg-slate-200 transition">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Metadata Modal -->
+    <div id="metadataModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden modal-flex items-center justify-center p-4">
+        <div class="bg-white border border-slate-200 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div class="px-6 py-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 sticky top-0 z-10 backdrop-blur-md">
+                <h3 class="text-xl font-bold bg-gradient-to-r from-ok-600 to-ok-500 bg-clip-text text-transparent">Edit Video Metadata</h3>
+                <button onclick="closeMetadataModal()" class="p-2 hover:bg-slate-50 rounded-full transition"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg></button>
+            </div>
+            <div class="p-6 space-y-6">
+                <!-- Title -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-2 tracking-widest">YouTube Title</label>
+                    <input type="text" id="meta_title" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-ok-500/50 outline-none transition font-medium">
+                </div>
+                <!-- Description -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-2 tracking-widest">Description</label>
+                    <textarea id="meta_desc" rows="8" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-ok-500/50 outline-none transition font-medium resize-none leading-relaxed"></textarea>
+                </div>
+                <!-- Tags -->
+                <div>
+                    <label class="block text-xs font-bold text-slate-400 uppercase mb-2 tracking-widest">Tags (Comma Separated)</label>
+                    <input type="text" id="meta_tags" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-ok-500/50 outline-none transition font-medium">
+                </div>
+            </div>
+            <div class="px-6 py-4 border-t border-slate-200 bg-slate-50 flex gap-3 justify-end italic">
+                <button onclick="closeMetadataModal()" class="px-6 py-2.5 rounded-xl bg-slate-50 hover:bg-slate-100 text-sm font-bold transition">Cancel</button>
+                <button onclick="saveMetadataChanges()" class="px-8 py-2.5 rounded-xl bg-gradient-to-r from-ok-500 to-ok-600 hover:scale-105 active:scale-95 text-white text-sm font-bold shadow-lg shadow-ok-500/20 transition-all">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Thumbnail Editor Modal -->
+    <div id="thumbModal" class="fixed inset-0 bg-black/90 backdrop-blur-md z-50 hidden modal-flex items-center justify-center p-4">
+        <div class="bg-white border border-slate-200 rounded-3xl w-full max-w-5xl max-h-[95vh] overflow-y-auto shadow-3xl flex flex-col md:flex-row h-full">
+            <!-- Left Side: Preview (Fixed) -->
+            <div class="w-full md:w-2/3 p-8 flex flex-col items-center justify-center bg-slate-100 overflow-hidden relative border-r border-slate-200">
+                <div class="relative w-full aspect-video rounded-2xl overflow-hidden shadow-2xl border-2 border-slate-200 group">
+                    <img id="thumb_preview" src="" class="w-full h-full object-cover">
+                    <!-- Overlay loading state -->
+                    <div id="thumb_loading" class="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center opacity-0 transition-opacity pointer-events-none">
+                        <div class="flex flex-col items-center gap-3">
+                            <div class="w-10 h-10 border-4 border-ok-200 border-t-blue-500 rounded-full animate-spin"></div>
+                            <span class="text-[10px] font-bold text-ok-600 uppercase tracking-widest animate-pulse">Processing Masterpiece...</span>
+                        </div>
+                    </div>
+                </div>
+                <p class="mt-6 text-xs text-slate-400 font-medium tracking-tight bg-slate-50 px-4 py-2 rounded-full border border-slate-200">Real-time preview of your modifications</p>
+            </div>
+            
+            <!-- Right Side: Controls (Scrollable) -->
+            <div class="w-full md:w-1/3 p-8 space-y-8 overflow-y-auto custom-scrollbar bg-slate-50">
+                <div class="flex justify-between items-center mb-2">
+                    <h3 class="text-xl font-bold text-slate-900 tracking-tight">Studio Editor</h3>
+                    <button onclick="closeThumbModal()" class="p-2 hover:bg-slate-100 rounded-full transition-colors text-slate-400 hover:text-slate-900">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
+                </div>
+
+                <!-- Overlay Section -->
+                <div class="space-y-4">
+                    <div class="flex items-center gap-2 mb-1">
+                        <div class="w-1.5 h-4 bg-blue-500 rounded-full"></div>
+                        <h4 class="text-[11px] font-bold text-ok-600 uppercase tracking-widest">Background & Overlay</h4>
+                    </div>
+                    
+                    <div class="space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Overlay Color</label>
+                                <input type="color" id="thumb_overlay_color" value="#000000" class="w-6 h-6 p-0 border-0 bg-transparent cursor-pointer rounded overflow-hidden">
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Color Opacity</label>
+                                <span id="val_overlay_opacity" class="text-[10px] font-mono text-ok-600">0.4</span>
+                            </div>
+                            <input type="range" id="thumb_overlay_opacity" min="0" max="1" step="0.05" value="0.4" class="w-full accent-ok-500">
+                        </div>
+                        <div class="pt-2 border-t border-slate-200 space-y-2">
+                            <label class="text-[10px] text-slate-500 font-bold uppercase block mb-2">Background Gallery</label>
+                            <div id="bg_gallery" class="grid grid-cols-4 gap-2 max-h-32 overflow-y-auto custom-scrollbar p-1">
+                                <!-- BG thumbnails will be injected here -->
+                            </div>
+                            <div class="flex items-center justify-between mt-3 pt-3 border-t border-slate-200">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase block">Upload Background</label>
+                                <input type="file" id="thumb_bg_file" accept="image/*" class="w-1/2 text-[10px] text-slate-400 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[9px] file:font-bold file:bg-ok-50 file:text-ok-600 hover:file:bg-blue-500/20 transition cursor-pointer">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Glow Section -->
+                <div class="space-y-4">
+                    <div class="flex items-center gap-2 mb-1">
+                        <div class="w-1.5 h-4 bg-purple-500 rounded-full"></div>
+                        <h4 class="text-[11px] font-bold text-brand-600 uppercase tracking-widest">Product Essence</h4>
+                    </div>
+
+                    <div class="space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Glow Color</label>
+                                <input type="color" id="thumb_glow_color" value="#FFFFFF" class="w-6 h-6 p-0 border-0 bg-transparent cursor-pointer rounded overflow-hidden">
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Glow Radius</label>
+                                <span id="val_glow_radius" class="text-[10px] font-mono text-brand-600">1.0</span>
+                            </div>
+                            <input type="range" id="thumb_glow_radius" min="0" max="3" step="0.1" value="1.0" class="w-full accent-brand-500">
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Glow Opacity</label>
+                                <span id="val_glow_opacity" class="text-[10px] font-mono text-brand-600">0.8</span>
+                            </div>
+                            <input type="range" id="thumb_glow_opacity" min="0" max="1" step="0.05" value="0.8" class="w-full accent-brand-500">
+                        </div>
+                        <div class="pt-2 border-t border-slate-200 space-y-2">
+                            <label class="text-[10px] text-slate-500 font-bold uppercase block">Replace Product Image</label>
+                            <div class="flex items-center justify-between gap-4 mt-1">
+                                <input type="file" id="thumb_prod_file" accept="image/*" class="w-full text-[10px] text-slate-400 file:mr-4 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[10px] file:font-bold file:bg-brand-50 file:text-brand-600 hover:file:bg-purple-500/20 transition cursor-pointer">
+                                <div class="flex items-center gap-2 shrink-0">
+                                    <span class="text-[9px] text-slate-500 font-bold uppercase">RM BG</span>
+                                    <label class="switch">
+                                        <input type="checkbox" id="thumb_rmbg">
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Position Section -->
+                <div class="space-y-4">
+                    <div class="flex items-center gap-2 mb-1">
+                        <div class="w-1.5 h-4 bg-green-500 rounded-full"></div>
+                        <h4 class="text-[11px] font-bold text-green-400 uppercase tracking-widest">Position & Scale</h4>
+                    </div>
+
+                    <div class="space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">X Offset</label>
+                                <span id="val_product_x" class="text-[10px] font-mono text-green-400">0</span>
+                            </div>
+                            <input type="range" id="thumb_product_x" min="-500" max="500" step="5" value="0" class="w-full accent-ok-500">
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Y Offset</label>
+                                <span id="val_product_y" class="text-[10px] font-mono text-green-400">0</span>
+                            </div>
+                            <input type="range" id="thumb_product_y" min="-400" max="400" step="5" value="0" class="w-full accent-ok-500">
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Scale</label>
+                                <span id="val_product_scale" class="text-[10px] font-mono text-green-400">1.0</span>
+                            </div>
+                            <input type="range" id="thumb_product_scale" min="0.1" max="2.0" step="0.05" value="1.0" class="w-full accent-ok-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Typography Section -->
+                <div class="space-y-4">
+                    <div class="flex items-center gap-2 mb-1">
+                        <div class="w-1.5 h-4 bg-orange-500 rounded-full"></div>
+                        <h4 class="text-[11px] font-bold text-orange-400 uppercase tracking-widest">Typography</h4>
+                    </div>
+
+                    <div class="space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                        <div class="space-y-2">
+                            <label class="text-[10px] text-slate-500 font-bold uppercase">Thumbnail Text</label>
+                            <input type="text" id="thumb_text_content" class="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold focus:border-orange-500/50 outline-none transition" placeholder="Enter custom text...">
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Top Color</label>
+                                <input type="color" id="thumb_text_top" value="#facc15" class="w-full h-8 p-0 border-0 bg-transparent cursor-pointer rounded overflow-hidden">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Bottom Color</label>
+                                <input type="color" id="thumb_text_bot" value="#FFFFFF" class="w-full h-8 p-0 border-0 bg-transparent cursor-pointer rounded overflow-hidden">
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Text BG Color</label>
+                                <input type="color" id="thumb_text_bg_color" value="#000000" class="w-24 h-6 p-0 border-0 bg-transparent cursor-pointer rounded overflow-hidden">
+                            </div>
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">BG Opacity</label>
+                                <span id="val_text_bg_opacity" class="text-[10px] font-mono text-orange-400">0.9</span>
+                            </div>
+                            <input type="range" id="thumb_text_bg_opacity" min="0" max="1" step="0.05" value="0.9" class="w-full accent-brand-500">
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] text-slate-500 font-bold uppercase">Font File (.ttf)</label>
+                            <input type="text" id="thumb_font" class="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-xs focus:border-orange-500/50 outline-none transition" placeholder="Roboto-Bold.ttf">
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Font Size</label>
+                                <span id="val_font_size" class="text-[10px] font-mono text-orange-400">1.0</span>
+                            </div>
+                            <input type="range" id="thumb_font_size" min="0.5" max="1.8" step="0.05" value="1.0" class="w-full accent-brand-500">
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex justify-between">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Box Corner Radius</label>
+                                <span id="val_box_radius" class="text-[10px] font-mono text-orange-400">10</span>
+                            </div>
+                            <input type="range" id="thumb_box_radius" min="0" max="50" step="1" value="10" class="w-full accent-brand-500">
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-2 mt-4 mb-2">
+                        <div class="h-px flex-1 bg-slate-50"></div>
+                        <h4 class="text-[11px] font-bold text-orange-400 uppercase tracking-widest">Text Readability</h4>
+                    </div>
+                    <div class="space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                        <div class="flex items-center justify-between">
+                            <label class="text-[10px] text-slate-500 font-bold uppercase">Outline / Stroke</label>
+                            <input type="checkbox" id="thumb_stroke_enable" class="accent-brand-500">
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Outline Color</label>
+                                <input type="color" id="thumb_stroke_color" value="#000000" class="w-full h-8 p-0 border-0 bg-transparent cursor-pointer rounded overflow-hidden">
+                            </div>
+                            <div class="space-y-2">
+                                <div class="flex justify-between">
+                                    <label class="text-[10px] text-slate-500 font-bold uppercase">Width</label>
+                                    <span id="val_stroke_width" class="text-[10px] font-mono text-orange-400">3</span>
+                                </div>
+                                <input type="range" id="thumb_stroke_width" min="1" max="10" step="1" value="3" class="w-full accent-brand-500">
+                            </div>
+                        </div>
+
+                        <div class="flex items-center justify-between pt-2 border-t border-slate-200">
+                            <label class="text-[10px] text-slate-500 font-bold uppercase">Drop Shadow</label>
+                            <input type="checkbox" id="thumb_shadow_enable" class="accent-brand-500">
+                        </div>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="text-[10px] text-slate-500 font-bold uppercase">Shadow Color</label>
+                                <input type="color" id="thumb_shadow_color" value="#000000" class="w-full h-8 p-0 border-0 bg-transparent cursor-pointer rounded overflow-hidden">
+                            </div>
+                            <div class="space-y-2">
+                                <div class="flex justify-between">
+                                    <label class="text-[10px] text-slate-500 font-bold uppercase">Offset</label>
+                                    <span id="val_shadow_offset" class="text-[10px] font-mono text-orange-400">4</span>
+                                </div>
+                                <input type="range" id="thumb_shadow_offset" min="1" max="15" step="1" value="4" class="w-full accent-brand-500">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Footer Actions -->
+                <div class="flex gap-4 pt-4">
+                    <button onclick="resetThumbEditor()" class="flex-1 px-4 py-3 rounded-xl bg-slate-50 hover:bg-slate-100 text-xs font-bold transition-all border border-slate-200">Reset</button>
+                    <button onclick="saveThumbChanges()" class="flex-[2] px-6 py-3 rounded-xl bg-gradient-to-r from-ok-500 to-ok-600 active:scale-95 text-xs font-bold shadow-lg shadow-ok-500/20 transition-all border border-blue-400/20">Apply to Video</button>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}
+
+{% block scripts %}
+    <script>
+        let videos = [];
+        let appSettings = {};  // populated in init(); referenced by the thumbnail editor
+        let playlists = [];
+        let uploadedKeywords = new Set();
+        let bgImages = [];
+        let selectedBgFile = null;
+
+        function escapeHtml(value) {
+            const node = document.createElement('div');
+            node.textContent = String(value ?? '');
+            return node.innerHTML;
+        }
+
+        function projectUrl(projectId) {
+            return String(projectId).split('/').map(encodeURIComponent).join('/');
+        }
+
+        async function loadBgGallery() {
+            const resp = await fetch('/bg_list');
+            bgImages = await resp.json();
+            const container = document.getElementById('bg_gallery');
+            if(!container) return;
+            
+            container.replaceChildren();
+            bgImages.forEach(filename => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'bg-item relative aspect-video rounded-lg overflow-hidden cursor-pointer border-2 border-transparent hover:border-blue-500/50 transition-all group';
+                item.dataset.filename = filename;
+                item.addEventListener('click', () => selectBg(filename));
+                const image = document.createElement('img');
+                image.src = `/bg_image/${encodeURIComponent(filename)}`;
+                image.alt = '';
+                image.className = 'w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all';
+                item.appendChild(image);
+                container.appendChild(item);
+            });
+        }
+
+        function selectBg(filename) {
+            selectedBgFile = filename;
+            document.querySelectorAll('.bg-item').forEach(el => {
+                const isSelected = el.getAttribute('data-filename') === filename;
+                el.classList.toggle('border-blue-500', isSelected);
+                el.classList.toggle('ring-2', isSelected);
+                el.classList.toggle('ring-blue-500/50', isSelected);
+                el.querySelector('img').classList.toggle('grayscale-0', isSelected);
+                el.querySelector('img').classList.toggle('grayscale', !isSelected);
+            });
+            updateThumbPreview();
+        }
+
+        async function checkAuth() {
+            try {
+                const resp = await fetch('/check_auth');
+                const data = await resp.json();
+                console.log("Auth Status Check:", data); // Debugging
+                if (data.authenticated) {
+                    document.getElementById('authStatusHeader').style.display = 'flex';
+                    document.getElementById('authenticatedAsText').textContent = `Authenticated as ${data.channel_name}`;
+                    await loadPlaylists();
+                    await loadVideos();
+                } else {
+                    document.getElementById('authModal').classList.remove('hidden');
+                    let statusText = data.channel_name;
+                    if (data.error && data.error.includes("WRONG_VERSION_NUMBER")) {
+                        statusText = "SSL Error (Check VPN/Proxy)";
+                    }
+                    document.getElementById('channelNameDisplay').innerText = statusText;
+                }
+            } catch (e) {
+                console.error("Auth check failed:", e);
+                document.getElementById('channelNameDisplay').innerText = "Server Error";
+            }
+        }
+
+        async function authenticate(event) {
+            const btn = event.currentTarget;
+            const originalText = btn.innerText;
+            btn.innerText = "Checking Browser...";
+            btn.disabled = true;
+            
+            showModal("Authenticating", "A browser window should open. Please log in and authorize the app, then return here.", "info");
+
+            try {
+                const resp = await fetch('/authenticate', {method: 'POST'});
+                const data = await resp.json();
+                if (data.authenticated) {
+                    location.reload();
+                } else if (data.error) {
+                    let errorMessage = data.error;
+                    if (errorMessage.includes("WRONG_VERSION_NUMBER")) {
+                        errorMessage += "\n\nTip: This is an SSL/Network error. Please disable VPN or Proxy and try again.";
+                    }
+                    showModal("Auth Error", errorMessage, "error");
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                showModal("Request Failed", "Could not reach server. Please check if the app is running.", "error");
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        async function logoutYouTube() {
+            showModal("Logout YouTube", "Are you sure you want to switch account?", "warning", async () => {
+                const resp = await fetch('/logout_youtube', {method: 'POST'});
+                const data = await resp.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    showModal("Logout Failed", data.error, "error");
+                }
+            });
+        }
+
+        async function loadPlaylists() {
+            const resp = await fetch('/get_playlists');
+            playlists = await resp.json();
+            const playlistSelect = document.getElementById('globalPlaylist');
+            playlistSelect.replaceChildren();
+            playlists.forEach(playlist => {
+                const option = document.createElement('option');
+                option.value = playlist.id;
+                option.textContent = playlist.title;
+                playlistSelect.appendChild(option);
+            });
+        }
+
+        async function loadVideos() {
+            const resp = await fetch('/list_videos');
+            videos = await resp.json();
+            const list = document.getElementById('videoList');
+            
+            if (videos.length === 0) {
+                list.innerHTML = '<div class="glass p-12 text-center text-slate-400">No generated videos found.</div>';
+                return;
+            }
+            
+            list.innerHTML = '';
+            list.className = 'space-y-4';
+            document.getElementById('bulkControls').classList.remove('hidden');
+
+            videos.forEach((v, idx) => {
+                const card = document.createElement('div');
+                const safeKeyword = escapeHtml(v.keyword);
+                const safeTitle = escapeHtml(v.yt_title);
+                const safeVideoName = escapeHtml(v.video_name || 'No Video');
+                const safeFileSize = escapeHtml(v.file_size || '0 MB');
+                const safeDuration = escapeHtml(v.duration || '00:00');
+                const encodedProjectId = projectUrl(v.keyword);
+                const playlistOptions = playlists.map(
+                    p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.title)}</option>`
+                ).join('');
+                const titleVariantOptions = (v.title_variants || []).map(
+                    title => `<option value="${escapeHtml(title)}">${escapeHtml(title)}</option>`
+                ).join('');
+                const uploadStatusLabel = v.can_delete_local
+                    ? 'Published'
+                    : (v.is_uploaded ? 'YouTube Processing' : 'Pending');
+                const uploadStatusClass = v.can_delete_local
+                    ? 'text-green-400'
+                    : (v.is_uploaded ? 'text-yellow-400' : 'text-slate-500');
+                card.id = `card_${idx}`;
+                card.className = 'glass p-5 card-inner border-l-4 ' + (v.has_video && v.has_metadata ? 'border-green-500' : 'border-red-500');
+                card.innerHTML = `
+                    <div class="flex flex-col gap-5">
+                        <!-- Top Header: Status & Keyword -->
+                        <div class="flex items-center justify-between border-b border-slate-200 pb-3">
+                            <div class="flex items-center gap-3">
+                                <span class="badge ${v.has_video ? 'badge-ok' : 'badge-error'} flex items-center gap-1.5">
+                                    <div class="w-1.5 h-1.5 rounded-full ${v.has_video ? 'bg-green-500' : 'bg-red-500'}"></div> Video
+                                </span>
+                                <span class="badge ${v.has_metadata ? 'badge-ok' : 'badge-error'} flex items-center gap-1.5">
+                                    <div class="w-1.5 h-1.5 rounded-full ${v.has_metadata ? 'bg-green-500' : 'bg-red-500'}"></div> Metadata
+                                </span>
+                                <span class="badge ${v.has_thumb ? 'badge-ok' : 'badge-error'} flex items-center gap-1.5">
+                                    <div class="w-1.5 h-1.5 rounded-full ${v.has_thumb ? 'bg-green-500' : 'bg-red-500'}"></div> Thumbnail
+                                </span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-widest bg-slate-100 px-2 py-1 rounded border border-slate-200">
+                                    KW: ${safeKeyword}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-wrap md:flex-nowrap gap-6 items-start">
+                            <!-- Left: Thumbnail Area (Fixed 16:9) -->
+                            <div class="relative w-full md:w-[320px] h-[180px] flex-shrink-0 bg-slate-100 rounded-xl overflow-hidden group shadow-2xl border border-slate-200">
+                                <img data-keyword="${safeKeyword}" src="/thumbnail/${encodedProjectId}" class="w-full h-full object-cover opacity-90 group-hover:scale-105 transition duration-500" 
+                                    onerror="this.onerror=null;this.src='data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1280 720'%3E%3Crect width='1280' height='720' fill='%23f1f5f9'/%3E%3Ctext x='640' y='372' font-family='sans-serif' font-size='40' fill='%2394a3b8' text-anchor='middle'%3ENo Thumbnail%3C/text%3E%3C/svg%3E'">
+                                <div class="absolute inset-0 bg-slate-100 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                     <button onclick="openThumbEditor(${idx})" class="p-3 bg-slate-100 backdrop-blur-md rounded-full border border-slate-300 hover:scale-110 transition active:scale-95">
+                                        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                                     </button>
+                                </div>
+                            </div>
+
+                            <!-- Middle: Info & Title -->
+                            <div class="flex-1 min-w-0 flex flex-col justify-between py-1">
+                                <div class="space-y-3">
+                                    <div>
+                                        <div class="flex justify-between items-center mb-1">
+                                            <label class="text-[9px] uppercase font-black text-slate-400 tracking-tighter">YouTube Title</label>
+                                            <div class="flex items-center gap-2">
+                                                <span id="save_status_${idx}" class="text-[9px] text-green-400 font-bold opacity-0 transition-opacity">SAVED!</span>
+                                            </div>
+                                        </div>
+                                        <div class="relative group/title">
+                                            <textarea id="title_${idx}" 
+                                                class="title-input w-full font-bold text-sm bg-slate-100 px-4 py-2.5 outline-none border border-slate-200 focus:border-red-500/50 rounded-xl transition shadow-inner resize-none min-h-[85px] pr-12"
+                                                placeholder="Enter video title...">${safeTitle}</textarea>
+                                            <button onclick="saveTitle(${idx})" 
+                                                class="absolute bottom-2 right-2 p-2 bg-green-500/20 hover:bg-green-500 text-green-400 hover:text-white rounded-lg transition-all border border-green-500/30 group-hover/title:scale-105 active:scale-95 shadow-lg"
+                                                title="Save Title">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                                            </button>
+                                        </div>
+                                        ${titleVariantOptions ? `
+                                        <select class="w-full mt-2 text-xs py-2 bg-slate-100 border-slate-200"
+                                            aria-label="SEO title variants"
+                                            onchange="document.getElementById('title_${idx}').value=this.value">
+                                            ${titleVariantOptions}
+                                        </select>` : ''}
+                                    </div>
+                                    
+                                    <div class="flex flex-wrap items-center gap-3">
+                                        <div class="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-md border border-slate-200">
+                                            <svg class="w-3 h-3 text-ok-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path></svg>
+                                            <span class="text-[10px] text-slate-500 font-mono truncate max-w-[150px]" title="${safeVideoName}">${safeVideoName}</span>
+                                        </div>
+                                        <div class="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-md border border-slate-200">
+                                            <svg class="w-3 h-3 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                            <span class="text-[10px] text-slate-600 font-bold uppercase">${safeDuration}</span>
+                                        </div>
+                                        <div class="flex items-center gap-1.5 px-2 py-1 bg-slate-50 rounded-md border border-slate-200">
+                                            <svg class="w-3 h-3 text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                                            <span class="text-[10px] text-slate-600 font-bold uppercase">${safeFileSize}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center gap-3 mt-4">
+                                    <button onclick="editMetadata(${idx})" class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-ok-50 hover:bg-ok-100 text-ok-600 rounded-xl text-[10px] font-bold uppercase transition border border-ok-200">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                        Edit Metadata
+                                    </button>
+                                    <button onclick="openThumbEditor(${idx})" class="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-brand-50 hover:bg-brand-100 text-brand-600 rounded-xl text-[10px] font-bold uppercase transition border border-brand-200">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                        Edit Thumbnail
+                                    </button>
+                                    <button id="delete_btn_${idx}" onclick="deleteFiles(${idx})" class="px-3 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-xl transition border border-red-500/20" title="Delete">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Right: Publish Actions -->
+                            <div class="w-full md:w-64 flex flex-col gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                                <div class="space-y-3">
+                                    <div class="space-y-1">
+                                        <label class="text-[9px] uppercase font-bold text-slate-400">Playlist</label>
+                                        <select id="playlist_${idx}" class="w-full text-xs py-2 bg-slate-100 border-slate-200">
+                                            <option value="none">Bulk Env</option>
+                                        ${playlistOptions}
+                                        </select>
+                                    </div>
+                                    <div class="space-y-1">
+                                        <label class="text-[9px] uppercase font-bold text-slate-400">Visibility</label>
+                                        <select id="privacy_${idx}" class="w-full text-xs py-2 bg-slate-100 border-slate-200" onchange="toggleSchedule(${idx})">
+                                            <option value="bulk" selected>Follow Bulk</option>
+                                            <option value="unlisted">Unlisted</option>
+                                            <option value="public">Public</option>
+                                            <option value="private">Private</option>
+                                            <option value="scheduled">Scheduled</option>
+                                        </select>
+                                        <input type="datetime-local" id="schedule_${idx}" class="hidden w-full text-[10px] mt-2 py-1.5 focus:border-blue-500/50">
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-auto pt-3 border-t border-slate-200">
+                                    <div id="status_container_${idx}" class="flex flex-col gap-2">
+                                        <div class="flex justify-between items-center px-1">
+                                            <span class="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">Status</span>
+                                            <span id="status_${idx}" class="text-[10px] ${uploadStatusClass} font-black uppercase italic">
+                                                ${uploadStatusLabel}
+                                            </span>
+                                        </div>
+                                        <button id="publish_btn_${idx}" onclick="uploadOne(${idx})" 
+                                            class="w-full btn-brand py-3.5 rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-500/20 active:scale-[0.98] transition">
+                                            ${v.can_delete_local ? 'Republish' : (v.is_uploaded ? 'Checking Processing…' : 'Publish')}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                list.appendChild(card);
+                if (v.is_uploaded && !v.can_delete_local) {
+                    document.getElementById(`publish_btn_${idx}`).disabled = true;
+                    pollProcessingStatus(idx, v);
+                }
+            });
+        }
+
+        async function pollProcessingStatus(idx, video) {
+            const statusEl = document.getElementById(`status_${idx}`);
+            const button = document.getElementById(`publish_btn_${idx}`);
+            try {
+                const response = await fetch(`/upload_status/${projectUrl(video.keyword)}`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                if (result.canDeleteLocal) {
+                    video.can_delete_local = true;
+                    uploadedKeywords.add(idx);
+                    document.getElementById('deleteAllBtn').classList.remove('hidden');
+                    statusEl.textContent = 'PUBLISHED';
+                    statusEl.className = 'text-[10px] text-green-400 font-black uppercase italic';
+                    button.textContent = 'Republish';
+                    button.disabled = false;
+                    return;
+                }
+                if (['failed', 'rejected'].includes(result.processingStatus)) {
+                    statusEl.textContent = 'PROCESSING FAILED';
+                    statusEl.className = 'text-[10px] text-red-400 font-black uppercase italic';
+                    button.textContent = 'Try Again';
+                    button.disabled = false;
+                    return;
+                }
+            } catch (_) {
+                // A temporary status-check failure should not create another upload.
+            }
+            window.setTimeout(() => pollProcessingStatus(idx, video), 15000);
+        }
+
+        async function saveTitle(idx) {
+            const v = videos[idx];
+            const newTitle = document.getElementById(`title_${idx}`).value;
+            
+            const resp = await fetch('/update_title', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ keyword: v.keyword, title: newTitle })
+            });
+            const res = await resp.json();
+            if (res.success) {
+                // Update local state so that bulk upload modal shows correct title
+                videos[idx].yt_title = newTitle;
+                
+                // Visual feedback beside the button
+                const statusEl = document.getElementById(`save_status_${idx}`);
+                statusEl.classList.remove('opacity-0');
+                
+                setTimeout(() => {
+                    statusEl.classList.add('opacity-0');
+                }, 2000);
+            } else {
+                showModal("Error", "Error saving title: " + res.error, "error");
+            }
+        }
+
+        let currentEditIdx = null;
+
+        async function editMetadata(idx) {
+            currentEditIdx = idx;
+            const v = videos[idx];
+            
+            const resp = await fetch(`/get_metadata?keyword=${encodeURIComponent(v.keyword)}`);
+            const data = await resp.json();
+            
+            if (data.success) {
+                document.getElementById('meta_title').value = data.title;
+                document.getElementById('meta_desc').value = data.description;
+                document.getElementById('meta_tags').value = data.tags;
+                document.getElementById('metadataModal').classList.remove('hidden');
+            } else {
+                showModal("Error", "Could not fetch metadata", "error");
+            }
+        }
+
+        function closeMetadataModal() {
+            document.getElementById('metadataModal').classList.add('hidden');
+        }
+
+        async function saveMetadataChanges() {
+            if (currentEditIdx === null) return;
+            const v = videos[currentEditIdx];
+            const title = document.getElementById('meta_title').value;
+            const desc = document.getElementById('meta_desc').value;
+            const tags = document.getElementById('meta_tags').value;
+            
+            const resp = await fetch('/save_metadata', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ keyword: v.keyword, title, description: desc, tags })
+            });
+            const res = await resp.json();
+            if (res.success) {
+                videos[currentEditIdx].yt_title = title;
+                document.getElementById(`title_${currentEditIdx}`).value = title;
+                closeMetadataModal();
+            } else {
+                showModal("Error", "Error saving metadata", "error");
+            }
+        }
+
+        let thumbDebounce = null;
+        async function openThumbEditor(idx) {
+            currentEditIdx = idx;
+            const v = videos[idx];
+            document.getElementById('thumb_preview').src = `/thumbnail/${projectUrl(v.keyword)}?t=${Date.now()}`;
+            document.getElementById('thumbModal').classList.remove('hidden');
+
+            // Load gallery if empty
+            if(bgImages.length === 0) await loadBgGallery();
+            selectedBgFile = null;
+            document.querySelectorAll('.bg-item').forEach(el => {
+                el.classList.remove('border-blue-500', 'ring-2', 'ring-blue-500/50');
+                el.querySelector('img').classList.add('grayscale');
+            });
+
+            applyDefaultThumbValues(v);
+
+            // Generate initial preview with default values
+            updateThumbPreview();
+        }
+
+        // Shared by openThumbEditor (first open) and resetThumbEditor (the
+        // Reset button) -- previously Reset only called closeThumbModal(),
+        // it never actually reset anything.
+        function applyDefaultThumbValues(v) {
+            document.getElementById('thumb_overlay_color').value = appSettings.thumb_overlay_color || '#000000';
+            document.getElementById('thumb_overlay_opacity').value = appSettings.thumb_overlay_opacity || 0.4;
+            document.getElementById('val_overlay_opacity').innerText = appSettings.thumb_overlay_opacity || '0.4';
+
+            document.getElementById('thumb_glow_color').value = appSettings.thumb_glow_color || '#FFFFFF';
+            document.getElementById('thumb_glow_radius').value = appSettings.thumb_glow_radius || 1.0;
+            document.getElementById('val_glow_radius').innerText = appSettings.thumb_glow_radius || '1.0';
+            document.getElementById('thumb_glow_opacity').value = appSettings.thumb_glow_opacity || 0.8;
+            document.getElementById('val_glow_opacity').innerText = appSettings.thumb_glow_opacity || '0.8';
+
+            // Use settings for typography defaults
+            document.getElementById('thumb_text_top').value = appSettings.thumb_text_top || '#facc15';
+            document.getElementById('thumb_text_bot').value = appSettings.thumb_text_bot || '#FFFFFF';
+            document.getElementById('thumb_text_bg_color').value = appSettings.thumb_text_bg_color || '#000000';
+            document.getElementById('thumb_text_bg_opacity').value = appSettings.thumb_text_bg_opacity || 0.9;
+            document.getElementById('val_text_bg_opacity').innerText = appSettings.thumb_text_bg_opacity || '0.9';
+            document.getElementById('thumb_font').value = appSettings.thumb_font || 'Roboto_Condensed-Bold.ttf';
+
+            document.getElementById('thumb_product_x').value = 0;
+            document.getElementById('val_product_x').innerText = '0';
+            document.getElementById('thumb_product_y').value = 0;
+            document.getElementById('val_product_y').innerText = '0';
+            document.getElementById('thumb_product_scale').value = 1.0;
+            document.getElementById('val_product_scale').innerText = '1.0';
+
+            document.getElementById('thumb_font_size').value = 1.0;
+            document.getElementById('val_font_size').innerText = '1.0';
+            document.getElementById('thumb_box_radius').value = 10;
+            document.getElementById('val_box_radius').innerText = '10';
+
+            document.getElementById('thumb_stroke_enable').checked = false;
+            document.getElementById('thumb_stroke_color').value = '#000000';
+            document.getElementById('thumb_stroke_width').value = 3;
+            document.getElementById('val_stroke_width').innerText = '3';
+
+            document.getElementById('thumb_shadow_enable').checked = false;
+            document.getElementById('thumb_shadow_color').value = '#000000';
+            document.getElementById('thumb_shadow_offset').value = 4;
+            document.getElementById('val_shadow_offset').innerText = '4';
+
+            // Set Title Text
+            document.getElementById('thumb_text_content').value = v.yt_title || v.keyword;
+        }
+
+        function resetThumbEditor() {
+            if (currentEditIdx === null) return;
+            applyDefaultThumbValues(videos[currentEditIdx]);
+            updateThumbPreview();
+        }
+
+        function closeThumbModal() {
+            document.getElementById('thumbModal').classList.add('hidden');
+        }
+
+        let currentPreviewUrl = null;
+        // Shared by updateThumbPreview (multipart) and saveThumbChanges (JSON)
+        // so the two never drift on which fields exist -- that drift is what
+        // used to let /save_thumbnail silently ignore params entirely.
+        function getThumbStyleParams() {
+            return {
+                font_size_mult: parseFloat(document.getElementById('thumb_font_size').value),
+                box_radius: parseInt(document.getElementById('thumb_box_radius').value),
+                text_stroke_color: document.getElementById('thumb_stroke_enable').checked ? document.getElementById('thumb_stroke_color').value : '',
+                text_stroke_width: document.getElementById('thumb_stroke_enable').checked ? parseInt(document.getElementById('thumb_stroke_width').value) : 0,
+                text_shadow_color: document.getElementById('thumb_shadow_enable').checked ? document.getElementById('thumb_shadow_color').value : '',
+                text_shadow_offset: parseInt(document.getElementById('thumb_shadow_offset').value),
+            };
+        }
+
+        async function updateThumbPreview() {
+            if (currentEditIdx === null) return;
+            const v = videos[currentEditIdx];
+
+            const fd = new FormData();
+            fd.append('keyword', v.keyword);
+            if (selectedBgFile) fd.append('selected_bg', selectedBgFile);
+
+            // Collect all control values
+            const controls = {
+                'bg_overlay_color': document.getElementById('thumb_overlay_color').value,
+                'bg_overlay_opacity': document.getElementById('thumb_overlay_opacity').value,
+                'custom_title': document.getElementById('thumb_text_content').value,
+                'text_bg_color': document.getElementById('thumb_text_bg_color').value,
+                'text_bg_opacity': document.getElementById('thumb_text_bg_opacity').value,
+                'glow_color': document.getElementById('thumb_glow_color').value,
+                'glow_radius_mult': document.getElementById('thumb_glow_radius').value,
+                'glow_opacity': document.getElementById('thumb_glow_opacity').value,
+                'product_x_offset': document.getElementById('thumb_product_x').value,
+                'product_y_offset': document.getElementById('thumb_product_y').value,
+                'product_scale_mult': document.getElementById('thumb_product_scale').value,
+                'font_name': document.getElementById('thumb_font').value,
+                ...getThumbStyleParams()
+            };
+
+            for (const [key, val] of Object.entries(controls)) {
+                fd.append(key, val);
+            }
+
+            const colors = [document.getElementById('thumb_text_top').value, document.getElementById('thumb_text_bot').value];
+            fd.append('text_colors', JSON.stringify(colors));
+
+            if (document.getElementById('thumb_bg_file').files[0]) {
+                fd.append('bg_file', document.getElementById('thumb_bg_file').files[0]);
+            }
+            if (document.getElementById('thumb_prod_file').files[0]) {
+                fd.append('prod_file', document.getElementById('thumb_prod_file').files[0]);
+                fd.append('rmbg', document.getElementById('thumb_rmbg').checked ? 'true' : 'false');
+            }
+
+            document.getElementById('thumb_loading').classList.remove('opacity-0');
+
+            try {
+                const resp = await fetch('/edit_thumbnail', {
+                    method: 'POST',
+                    body: fd
+                });
+                
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(errText);
+                }
+
+                const blob = await resp.blob();
+                if (currentPreviewUrl) URL.revokeObjectURL(currentPreviewUrl);
+                currentPreviewUrl = URL.createObjectURL(blob);
+                document.getElementById('thumb_preview').src = currentPreviewUrl;
+            } catch (e) {
+                console.error("Preview failed:", e);
+                // Optionally show a small error toast/message
+            } finally {
+                document.getElementById('thumb_loading').classList.add('opacity-0');
+            }
+        }
+
+        // Single init path -- v6 called checkAuth() from both
+        // DOMContentLoaded and window.onload, doubling every startup request
+        // and racing two #videoList renders against each other.
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const sResp = await fetch('/get_settings');
+                appSettings = await sResp.json();
+            } catch (e) { console.error("Could not fetch settings", e); }
+
+            checkAuth();
+
+            ['thumb_overlay_opacity', 'thumb_overlay_color', 'thumb_glow_color', 'thumb_glow_radius', 'thumb_glow_opacity', 'thumb_text_top', 'thumb_text_bot', 'thumb_text_bg_color', 'thumb_text_bg_opacity', 'thumb_product_x', 'thumb_product_y', 'thumb_product_scale', 'thumb_text_content', 'thumb_font', 'thumb_font_size', 'thumb_box_radius', 'thumb_stroke_color', 'thumb_stroke_width', 'thumb_shadow_color', 'thumb_shadow_offset'].forEach(id => {
+                const el = document.getElementById(id);
+                if(el) {
+                    el.addEventListener('input', (e) => {
+                        const valEl = document.getElementById('val_' + id.replace('thumb_', ''));
+                        if(valEl) valEl.innerText = e.target.value;
+
+                        clearTimeout(thumbDebounce);
+                        thumbDebounce = setTimeout(updateThumbPreview, 500);
+                    });
+                }
+            });
+
+            // BUGFIX: thumb_rmbg was missing from this list entirely, so
+            // toggling "Remove Background" never refreshed the preview --
+            // the checkbox only took effect the next time some OTHER control
+            // happened to trigger a refresh.
+            ['thumb_stroke_enable', 'thumb_shadow_enable', 'thumb_rmbg'].forEach(id => {
+                document.getElementById(id)?.addEventListener('change', updateThumbPreview);
+            });
+
+            // Add listeners for file inputs
+            ['thumb_bg_file', 'thumb_prod_file'].forEach(id => {
+                document.getElementById(id)?.addEventListener('change', updateThumbPreview);
+            });
+        });
+
+        async function saveThumbChanges() {
+            if (currentEditIdx === null) return;
+            const v = videos[currentEditIdx];
+            
+            const params = {
+                keyword: v.keyword,
+                // custom_title and font_name were missing here before -- with
+                // the old copy-based save this didn't matter (nothing in this
+                // object was even read), but now that /save_thumbnail actually
+                // re-renders from these params, leaving them out would silently
+                // revert the saved title/font to their defaults.
+                custom_title: document.getElementById('thumb_text_content').value,
+                font_name: document.getElementById('thumb_font').value,
+                bg_overlay_color: document.getElementById('thumb_overlay_color').value,
+                bg_overlay_opacity: parseFloat(document.getElementById('thumb_overlay_opacity').value),
+                text_colors: [document.getElementById('thumb_text_top').value, document.getElementById('thumb_text_bot').value],
+                text_bg_color: document.getElementById('thumb_text_bg_color').value,
+                text_bg_opacity: parseFloat(document.getElementById('thumb_text_bg_opacity').value),
+                glow_color: document.getElementById('thumb_glow_color').value,
+                glow_radius_mult: parseFloat(document.getElementById('thumb_glow_radius').value),
+                glow_opacity: parseFloat(document.getElementById('thumb_glow_opacity').value),
+                product_x_offset: parseFloat(document.getElementById('thumb_product_x').value),
+                product_y_offset: parseFloat(document.getElementById('thumb_product_y').value),
+                product_scale_mult: parseFloat(document.getElementById('thumb_product_scale').value),
+                ...getThumbStyleParams()
+            };
+            if (selectedBgFile) params.selected_bg = selectedBgFile;
+
+            const resp = await fetch('/save_thumbnail', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(params)
+            });
+            const res = await resp.json();
+            if (res.success) {
+                // Update the thumbnail on the main page
+                const masterNodes = document.querySelectorAll(`img[data-keyword="${v.keyword}"]`);
+                masterNodes.forEach(img => {
+                    const kw = encodeURIComponent(v.keyword);
+                    img.src = `/thumbnail/${projectUrl(kw)}?t=${Date.now()}`;
+                });
+                closeThumbModal();
+            } else {
+                showModal("Error", "Error saving thumbnail", "error");
+            }
+        }
+
+        function toggleSchedule(id) {
+            const globalPrivacy = document.getElementById('globalPrivacy').value;
+            
+            if (id === 'global') {
+                const adv = document.getElementById('advancedSchedule');
+                const startField = document.getElementById('globalSchedule');
+                const endField = document.getElementById('globalEndTime');
+                if (globalPrivacy === 'scheduled') {
+                    adv.classList.remove('hidden');
+                    if(!startField.value) {
+                        const d = new Date(); d.setHours(d.getHours() + 1);
+                        startField.value = d.toISOString().slice(0, 16);
+                    }
+                    if(!endField.value) {
+                        const d = new Date(); d.setHours(23); d.setMinutes(59);
+                        endField.value = d.toISOString().slice(0, 16);
+                    }
+                } else {
+                    adv.classList.add('hidden');
+                }
+                // Also update all individual items that are set to "Follow Bulk"
+                videos.forEach((_, idx) => {
+                    const indPrivacy = document.getElementById(`privacy_${idx}`).value;
+                    if (indPrivacy === 'bulk') toggleSchedule(idx);
+                });
+            } else {
+                const indPrivacy = document.getElementById(`privacy_${id}`).value;
+                const activePrivacy = (indPrivacy === 'bulk') ? globalPrivacy : indPrivacy;
+                const input = document.getElementById(`schedule_${id}`);
+                
+                if (activePrivacy === 'scheduled') {
+                    input.classList.remove('hidden');
+                } else {
+                    input.classList.add('hidden');
+                }
+            }
+        }
+
+        async function uploadOne(idx) {
+            const v = videos[idx];
+            let privacy = document.getElementById(`privacy_${idx}`).value;
+            let pl = document.getElementById(`playlist_${idx}`).value;
+            let schedule = document.getElementById(`schedule_${idx}`).value;
+            const statusEl = document.getElementById(`status_${idx}`);
+            
+            // Priority logic
+            if (privacy === 'bulk') privacy = document.getElementById('globalPrivacy').value;
+            if (pl === 'none') pl = document.getElementById('globalPlaylist').value;
+            if (privacy === 'scheduled' && !schedule) schedule = document.getElementById('globalSchedule').value;
+
+            // Date validation
+            let isoDate = null;
+            if (privacy === 'scheduled') {
+                if (!schedule) { 
+                    statusEl.innerText = "Set Date!";
+                    return; 
+                }
+                isoDate = new Date(schedule).toISOString();
+            }
+
+            statusEl.innerText = "";
+            const pubBtn = document.getElementById(`publish_btn_${idx}`);
+            const originalText = pubBtn.innerText;
+            
+            pubBtn.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4 spinner-icon" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>Uploading...</span>
+                </div>
+            `;
+            pubBtn.disabled = true;
+            pubBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+            // Set up polling for progress
+            const progressInterval = setInterval(async () => {
+                try {
+                    const progressResp = await fetch(`/upload_progress/${projectUrl(v.keyword)}`);
+                    const progressData = await progressResp.json();
+                    if (progressData.progress > 0 && progressData.progress < 100) {
+                        pubBtn.innerHTML = `
+                            <div class="flex items-center gap-2">
+                                <svg class="w-4 h-4 spinner-icon" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <span>Uploading ${progressData.progress}%...</span>
+                            </div>
+                        `;
+                    }
+                } catch (pe) { console.error("Progress poll error:", pe); }
+            }, 1000);
+
+            try {
+                const resp = await fetch('/upload_video', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ 
+                        keyword: v.keyword, 
+                        privacy: privacy === 'scheduled' ? 'private' : privacy, 
+                        playlist_id: pl,
+                        publish_at: isoDate
+                    })
+                });
+                clearInterval(progressInterval);
+                const res = await resp.json();
+                if (res.success) {
+                    pubBtn.innerHTML = `
+                        <div class="flex items-center gap-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            <span>Republish</span>
+                        </div>
+                    `;
+                    pubBtn.disabled = false;
+                    pubBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                    pubBtn.classList.replace('btn-brand', 'bg-green-600/20');
+                    pubBtn.classList.add('text-green-400', 'border', 'border-green-500/50');
+                    
+                    if (res.canDeleteLocal) {
+                        uploadedKeywords.add(idx);
+                        document.getElementById('deleteAllBtn').classList.remove('hidden');
+                    }
+                    statusEl.innerText = res.canDeleteLocal ? "PUBLISHED" : "YOUTUBE PROCESSING";
+                    statusEl.classList.remove('text-red-400');
+                    statusEl.classList.add(res.canDeleteLocal ? 'text-green-400' : 'text-yellow-400');
+                } else {
+                    statusEl.innerText = "Failed";
+                    statusEl.classList.add('text-red-400');
+                    pubBtn.innerText = "Try Again";
+                    pubBtn.disabled = false;
+                    pubBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+            } catch (e) {
+                statusEl.innerText = "Error";
+                statusEl.classList.add('text-red-400');
+                pubBtn.innerText = "Error";
+                pubBtn.disabled = false;
+                pubBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        }
+
+        async function uploadAll() {
+            const globalPrivacy = document.getElementById('globalPrivacy').value;
+            const globalPl = document.getElementById('globalPlaylist').value;
+            const globalScheduleInput = document.getElementById('globalSchedule').value;
+            const globalEndTimeInput = document.getElementById('globalEndTime').value;
+            const vidsPerDay = parseInt(document.getElementById('vidsPerDay').value) || 3;
+            
+            showModal("Bulk Upload", "Starting process...", "loading");
+            let success = 0;
+            let total = videos.length;
+
+            // Pre-calculate schedules if using global scheduled mode
+            let calculatedSchedules = [];
+            if (globalPrivacy === 'scheduled' && globalScheduleInput && globalEndTimeInput) {
+                const globalStart = new Date(globalScheduleInput);
+                const globalEnd = new Date(globalEndTimeInput);
+                
+                let scheduleCursor = new Date(globalStart);
+                let vidsProcessed = 0;
+                
+                while (vidsProcessed < total) {
+                    let vidsForToday = [];
+                    for (let i = 0; i < total; i++) {
+                        if(calculatedSchedules[i] !== undefined) continue;
+
+                        const indPriv = document.getElementById(`privacy_${i}`).value;
+                        if (indPriv === 'bulk' || indPriv === 'scheduled') {
+                            vidsForToday.push(i);
+                            if (vidsForToday.length === vidsPerDay) break;
+                        } else {
+                            calculatedSchedules[i] = null;
+                            vidsProcessed++;
+                        }
+                    }
+                    
+                    if (vidsForToday.length > 0) {
+                        // Current day's start is scheduleCursor
+                        // Current day's end must have same time as globalEnd
+                        let currentDayEnd = new Date(scheduleCursor);
+                        currentDayEnd.setHours(globalEnd.getHours(), globalEnd.getMinutes(), 0, 0);
+                        
+                        // Handle potential day-wrap (e.g. 11 PM to 2 AM)
+                        if (currentDayEnd <= scheduleCursor) {
+                            currentDayEnd.setDate(currentDayEnd.getDate() + 1);
+                        }
+                        
+                        let timePool = currentDayEnd.getTime() - scheduleCursor.getTime();
+                        if (timePool < 0) timePool = 3600000; 
+                        
+                        let interval = vidsForToday.length > 1 ? timePool / (vidsForToday.length - 1) : 0;
+                        vidsForToday.forEach((vidIdx, offset) => {
+                            let time = new Date(scheduleCursor.getTime() + (interval * offset));
+                            calculatedSchedules[vidIdx] = time.toISOString();
+                        });
+                        
+                        vidsProcessed += vidsForToday.length;
+                        
+                        // Move cursor to next day same as globalStart
+                        let nextDayStart = new Date(scheduleCursor);
+                        nextDayStart.setDate(nextDayStart.getDate() + 1);
+                        nextDayStart.setHours(globalStart.getHours(), globalStart.getMinutes(), 0, 0);
+                        scheduleCursor = nextDayStart;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            
+            for(let i=0; i<total; i++) {
+                const v = videos[i];
+                let privacy = document.getElementById(`privacy_${i}`).value;
+                let pl = document.getElementById(`playlist_${i}`).value;
+                let schedule = document.getElementById(`schedule_${i}`).value;
+                const statusEl = document.getElementById(`status_${i}`);
+
+                showModal("Bulk Upload", `Uploading (${i+1}/${total}): ${v.yt_title}`, "loading");
+
+                // Priority logic
+                if (privacy === 'bulk') privacy = globalPrivacy;
+                if (pl === 'none') pl = globalPl;
+                
+                // Use calculated schedule if available
+                if (privacy === 'scheduled') {
+                    if (calculatedSchedules[i]) {
+                        schedule = calculatedSchedules[i];
+                    } else if (!schedule) {
+                        schedule = globalScheduleInput;
+                    }
+                }
+
+                // Date validation
+                let isoDate = null;
+                if (privacy === 'scheduled') {
+                    if (!schedule) { 
+                        statusEl.innerText = "No Date";
+                        continue; 
+                    }
+                    try { isoDate = new Date(schedule).toISOString(); } catch(e) { statusEl.innerText = "Date Error"; continue; }
+                }
+
+                const pubBtn = document.getElementById(`publish_btn_${i}`);
+                pubBtn.innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 spinner-icon" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>Uploading...</span>
+                    </div>
+                `;
+                pubBtn.disabled = true;
+                pubBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+                // Set up polling for progress
+                const progressInterval = setInterval(async () => {
+                    try {
+                        const progressResp = await fetch(`/upload_progress/${projectUrl(v.keyword)}`);
+                        const progressData = await progressResp.json();
+                        if (progressData.progress > 0 && progressData.progress < 100) {
+                            const progText = `Uploading ${progressData.progress}%...`;
+                            pubBtn.innerHTML = `
+                                <div class="flex items-center gap-2">
+                                    <svg class="w-4 h-4 spinner-icon" fill="none" viewBox="0 0 24 24">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                    </svg>
+                                    <span>${progText}</span>
+                                </div>
+                            `;
+                            // Update modal if it's visible
+                            const modalMsg = document.getElementById('modalMsg');
+                            if (modalMsg) {
+                                modalMsg.innerText = `Uploading (${i+1}/${total}): ${v.yt_title} - ${progressData.progress}%`;
+                            }
+                        }
+                    } catch (pe) { console.error("Progress poll error:", pe); }
+                }, 1000);
+
+                try {
+                    const resp = await fetch('/upload_video', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ 
+                            keyword: v.keyword, 
+                            privacy: privacy === 'scheduled' ? 'private' : privacy, 
+                            playlist_id: pl,
+                            publish_at: isoDate
+                        })
+                    });
+                    clearInterval(progressInterval);
+                    const res = await resp.json();
+                    if(res.success) {
+                        success++;
+                        const pubBtn = document.getElementById(`publish_btn_${i}`);
+                        pubBtn.innerHTML = `
+                            <div class="flex items-center gap-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                                <span>Republish</span>
+                            </div>
+                        `;
+                        pubBtn.disabled = false;
+                        pubBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                        pubBtn.classList.replace('btn-brand', 'bg-green-600/20');
+                        pubBtn.classList.add('text-green-400', 'border', 'border-green-500/50');
+                        
+                        if (res.canDeleteLocal) uploadedKeywords.add(i);
+                        statusEl.innerText = res.canDeleteLocal ? "PUBLISHED" : "YOUTUBE PROCESSING";
+                        statusEl.classList.remove('text-red-400');
+                        statusEl.classList.add(res.canDeleteLocal ? 'text-green-400' : 'text-yellow-400');
+                    } else {
+                        const pubBtn = document.getElementById(`publish_btn_${i}`);
+                        pubBtn.innerText = "Try Again";
+                        pubBtn.disabled = false;
+                        pubBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                        statusEl.innerText = res.error || "Failed";
+                        console.error("Upload failed for index", i, res.error);
+                    }
+                } catch (e) {
+                    const pubBtn = document.getElementById(`publish_btn_${i}`);
+                    pubBtn.innerText = "Error";
+                    pubBtn.disabled = false;
+                    pubBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                    statusEl.innerText = "Fetch Error";
+                }
+                
+                // Add a small delay between uploads for stability
+                if (i < total - 1) await new Promise(r => setTimeout(r, 2000));
+            }
+            
+            if (uploadedKeywords.size > 0) document.getElementById('deleteAllBtn').classList.remove('hidden');
+            
+            if (success === total) {
+                showModal("All Success!", `Successfully uploaded all ${total} videos.`, "success");
+            } else if (success > 0) {
+                showModal("Partial Result", `Uploaded ${success} of ${total} videos. Check red labels for errors.`, "warning");
+            } else {
+                showModal("Upload Failed", `Could not upload any videos. Check connection/quota.`, "error");
+            }
+        }
+
+        async function deleteFiles(idx) {
+            const v = videos[idx];
+            showModal("Confirm Delete", `Are you sure you want to delete all files for: ${v.keyword}?`, "warning", () => {
+                actualDelete(idx);
+            });
+        }
+
+        async function actualDelete(idx) {
+            const v = videos[idx];
+            closeModal();
+            showModal("Deleting...", `Removing folder: ${v.keyword}`, "loading");
+            
+            try {
+                const resp = await fetch('/delete_folder', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ keyword: v.keyword })
+                });
+                const res = await resp.json();
+                if (res.success) {
+                    const card = document.getElementById(`card_${idx}`);
+                    const delBtn = document.getElementById(`delete_btn_${idx}`);
+                    if (card) card.classList.add('opacity-30', 'pointer-events-none');
+                    if (delBtn) delBtn.innerHTML = "Deleted";
+                    
+                    showModal("Deleted", `Folder for ${v.keyword} has been removed.`, "success");
+                    setTimeout(closeModal, 1500);
+                } else {
+                    showModal("Delete Failed", res.error || "Unknown error occurred", "error");
+                }
+            } catch (err) {
+                console.error("Delete Error:", err);
+                showModal("Delete Error", "Failed to connect to server.", "error");
+            }
+        }
+
+        async function deleteAllUploaded() {
+            showModal("Confirm Bulk Delete", "Delete all files for all successfully uploaded videos?", "warning", () => {
+                actualDeleteAllUploaded();
+            });
+        }
+
+        async function actualDeleteAllUploaded() {
+            closeModal();
+            let count = 0;
+            showModal("Deleting...", "Removing files for uploaded videos", "loading");
+            
+            try {
+                for (let idx of uploadedKeywords) {
+                    const v = videos[idx];
+                    const resp = await fetch('/delete_folder', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ keyword: v.keyword })
+                    });
+                    const res = await resp.json();
+                    if (res.success) {
+                        const card = document.getElementById(`card_${idx}`);
+                        const delBtn = document.getElementById(`delete_btn_${idx}`);
+                        if (card) card.classList.add('opacity-30', 'pointer-events-none');
+                        if (delBtn) delBtn.innerHTML = "Deleted";
+                        count++;
+                    }
+                }
+                showModal("Cleanup Finished", `Deleted files for ${count} uploaded keywords.`, "success");
+                setTimeout(closeModal, 2000);
+                document.getElementById('deleteAllBtn').classList.add('hidden');
+            } catch (err) {
+                console.error("Bulk Delete Error:", err);
+                showModal("Cleanup Error", "An error occurred during bulk deletion.", "error");
+            }
+        }
+
+        function showModal(title, msg, type, onConfirm = null) {
+            const m = document.getElementById('modal');
+            m.classList.remove('hidden');
+            document.getElementById('modalTitle').innerText = title;
+            document.getElementById('modalMsg').innerText = msg;
+            
+            const icon = document.getElementById('modalIcon');
+            const confirmBtn = document.getElementById('modalConfirmBtn');
+            
+            if (onConfirm) {
+                confirmBtn.classList.remove('hidden');
+                confirmBtn.onclick = onConfirm;
+            } else {
+                confirmBtn.classList.add('hidden');
+            }
+
+            if (type === 'loading') {
+                icon.innerHTML = '<div class="animate-spin w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full mx-auto mb-4"></div>';
+            } else if (type === 'success') {
+                icon.innerHTML = '<svg class="w-16 h-16 text-green-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>';
+            } else if (type === 'warning') {
+                icon.innerHTML = '<svg class="w-16 h-16 text-yellow-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>';
+            } else {
+                icon.innerHTML = '<svg class="w-16 h-16 text-red-500 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>';
+            }
+        }
+
+        function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+        // Year stamp and navbar-scroll shading are handled globally by
+        // static/js/core.js (data-current-year + .appbar), so this page no
+        // longer needs its own copy of either.
+    </script>
+{% endblock %}

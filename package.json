@@ -1,0 +1,14 @@
+{
+  "name": "amzflow-ai-ui",
+  "version": "7.0.0",
+  "private": true,
+  "description": "Local UI build for AmzFlow AI (Tailwind utility layer only; components live in web_app/static/theme.css).",
+  "scripts": {
+    "build:css": "tailwindcss -c tailwind.config.cjs -i web_app/static/tailwind-input.css -o web_app/static/tailwind.min.css --minify",
+    "watch:css": "tailwindcss -c tailwind.config.cjs -i web_app/static/tailwind-input.css -o web_app/static/tailwind.min.css --watch",
+    "smoke": "node tests/browser_smoke.cjs"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.19"
+  }
+}

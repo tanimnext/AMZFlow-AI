@@ -1,0 +1,2 @@
+-r web_app/requirements_web.txt
+PyInstaller==6.21.0

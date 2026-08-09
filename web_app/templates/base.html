@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="{% block html_lang %}en{% endblock %}">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <meta name="color-scheme" content="light">
+    <title>{% block title %}{{ brand.name }}{% endblock %}</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23f97316'/><path d='M12 10l10 6-10 6z' fill='white'/></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
+    <script src="{{ url_for('static', filename='js/core.js') }}"></script>
+    {% block head_extra %}{% endblock %}
+</head>
+
+<body>
+    {% block chrome %}
+    <header class="appbar">
+        <div class="appbar-inner">
+            <a href="{{ url_for('index') }}" class="flex items-center gap-2.5 shrink-0" style="text-decoration:none">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="19" height="19">
+                        <path stroke-linecap="round" stroke-linejoin="round"
+                            d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+                    </svg>
+                </span>
+                <span>
+                    <span class="brand-name">{{ brand.name }} <span class="version-pill">{{ brand.version }}</span></span>
+                    <span class="brand-tagline block">{{ brand.tagline }}</span>
+                </span>
+            </a>
+
+            <nav class="flex items-center gap-1 flex-wrap" aria-label="Main">
+                {% set page = active_page|default('') %}
+                <a class="navlink" href="{{ url_for('index') }}" {% if page=='dashboard' %}aria-current="page" {% endif %}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z"/></svg>
+                    Dashboard
+                </a>
+                <a class="navlink" href="{{ url_for('create_url_page') }}" {% if page=='create_url' %}aria-current="page" {% endif %}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"/></svg>
+                    URL to Video
+                </a>
+                <a class="navlink" href="{{ url_for('create_keywords_page') }}" {% if page=='create_keywords' %}aria-current="page" {% endif %}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z"/></svg>
+                    Keywords / ASINs
+                </a>
+                <a class="navlink" href="{{ url_for('studio_page') }}" {% if page=='studio' %}aria-current="page" {% endif %}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M3 8.688c0-.864.933-1.406 1.683-.977l7.108 4.062a1.125 1.125 0 0 1 0 1.953l-7.108 4.062A1.125 1.125 0 0 1 3 16.81V8.688ZM12.75 8.688c0-.864.933-1.406 1.683-.977l7.108 4.062a1.125 1.125 0 0 1 0 1.953l-7.108 4.062a1.125 1.125 0 0 1-1.683-.977V8.688Z"/></svg>
+                    Studio
+                </a>
+                <a class="navlink" href="{{ url_for('settings_page') }}" {% if page=='settings' %}aria-current="page" {% endif %}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.7 7.7 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.93 6.93 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>
+                    Settings
+                </a>
+            </nav>
+
+            <div class="flex items-center gap-2 ml-auto">
+                {% if user_email %}
+                <span class="text-right hidden sm:block leading-tight">
+                    <span class="block text-[12px] font-semibold" style="color:var(--text)">{{ user_name }}</span>
+                    <span class="block text-[11px]" style="color:var(--text-faint)">{{ user_email }}</span>
+                </span>
+                {% endif %}
+                <form action="{{ url_for('logout') }}" method="post">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-ghost btn-sm" title="Sign out">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75"/></svg>
+                        <span class="hidden md:inline">Logout</span>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </header>
+    {% endblock %}
+
+    <main class="page {% block page_class %}{% endblock %}" id="main">
+        {% block content %}{% endblock %}
+    </main>
+
+    {% block footer %}
+    <footer class="text-center text-[11px] pb-8" style="color:var(--text-faint)">
+        &copy; <span data-current-year></span> {{ brand.name }} {{ brand.version }} &middot; {{ brand.tagline }}
+    </footer>
+    {% endblock %}
+
+    <div id="toastHost"></div>
+
+    <!-- Shared audio dock: voice previews from any page render here. -->
+    <div id="audioDock" hidden>
+        <div class="flex items-center justify-between gap-2 mb-2">
+            <span class="text-[12px] font-bold" id="audioDockLabel">Voice preview</span>
+            <button type="button" class="btn btn-ghost btn-icon" id="audioDockClose" aria-label="Close voice preview">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <audio id="audioDockPlayer" controls class="w-full" style="height:34px"></audio>
+        <div class="flex items-center justify-between mt-2 text-[11px]" style="color:var(--text-faint)">
+            <span id="audioDockMeta"></span>
+            <button type="button" class="btn btn-ghost btn-sm" id="audioDockPrev" hidden>Play previous sample</button>
+        </div>
+    </div>
+
+    <!-- Shared folder browser: any "Browse Folder" button opens this. -->
+    <div id="folderBrowserBackdrop" class="modal-backdrop" hidden>
+        <div class="modal-panel" style="max-width:560px" role="dialog" aria-modal="true" aria-labelledby="folderBrowserTitle">
+            <div class="card-pad">
+                <div class="flex items-center justify-between mb-2">
+                    <h2 id="folderBrowserTitle" class="card-title">Choose a Folder</h2>
+                    <button type="button" class="btn btn-ghost btn-icon" id="folderBrowserClose" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <p class="mono text-[12px] mb-2 truncate" id="folderBrowserPath" style="color:var(--text-faint)"></p>
+                <div class="table-wrap" style="max-height:320px;overflow-y:auto">
+                    <div id="folderBrowserList"></div>
+                </div>
+                <p id="folderBrowserError" class="hidden hint mt-2" style="color:var(--danger-600)"></p>
+                <div class="flex justify-end gap-2 mt-4">
+                    <button type="button" class="btn" id="folderBrowserCancel">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="folderBrowserSelect">Use This Folder</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+
+</html>

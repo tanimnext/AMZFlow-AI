@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23f97316'/><path d='M12 10l10 6-10 6z' fill='white'/></svg>">
+    <title>Admin Dashboard · {{ brand.name }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='tailwind.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
+</head>
+<body>
+    <main class="page">
+        <div class="flex items-center justify-between mb-6 flex-wrap gap-3">
+            <div>
+                <p class="section-label mb-1">{{ brand.name }}</p>
+                <h1 class="text-[22px] font-extrabold" style="color:var(--text)">Admin Dashboard</h1>
+                <p class="text-[13px]" style="color:var(--text-faint)">Local user &amp; license management — runs only on this Mac.</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="mb-5 space-y-2">
+                {% for category, msg in messages %}
+                <div class="card card-pad text-[13px]" style="color:{{ 'var(--ok-700)' if category == 'success' else 'var(--danger-700)' }}">{{ msg }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+
+        <section class="card mb-6" aria-labelledby="add-user-heading">
+            <div class="card-head"><h2 id="add-user-heading" class="card-title">Add New User</h2></div>
+            <div class="card-pad">
+                <form method="POST" action="{{ url_for('add_user') }}" class="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <label class="field" style="margin:0"><span class="label">Name</span><input name="name" placeholder="Name"></label>
+                    <label class="field" style="margin:0"><span class="label">Email</span><input name="email" type="email" required placeholder="Email"></label>
+                    <label class="field" style="margin:0"><span class="label">Quota</span><input name="quota" placeholder="Unlimited / 100"></label>
+                    <label class="field" style="margin:0"><span class="label">Expiry</span><input name="expiry_date" placeholder="YYYY-MM-DD or Lifetime"></label>
+                    <button type="submit" class="btn btn-primary">Add User</button>
+                </form>
+            </div>
+        </section>
+
+        <section class="card" aria-labelledby="users-heading">
+            <h2 id="users-heading" class="sr-only">Users</h2>
+            <div class="table-wrap" style="border:none">
+                <table class="data">
+                    <thead>
+                        <tr>
+                            <th>Name</th><th>Email</th><th>Machine ID</th><th>Used / Quota</th>
+                            <th>Expiry</th><th>Last Login</th><th class="text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for u in users %}
+                        <tr>
+                            <td>{{ u.name or '—' }}</td>
+                            <td style="color:var(--text-muted)">{{ u.email }}</td>
+                            <td class="mono text-[11px]" style="color:var(--text-faint)">{{ u.machine_id or 'Not bound' }}</td>
+                            <td>{{ u.used or 0 }} / {{ u.quota or 'Unlimited' }}</td>
+                            <td>{{ u.expiry_date or 'Lifetime' }} {{ u.expiry_time if u.expiry_date and u.expiry_date.lower() != 'lifetime' else '' }}</td>
+                            <td class="text-[11px]" style="color:var(--text-faint)">{{ u.last_login or 'Never' }}</td>
+                            <td>
+                                <div class="flex justify-end gap-2 flex-wrap">
+                                    <button type="button" onclick="document.getElementById('edit-{{ loop.index }}').classList.toggle('hidden')" class="btn btn-sm">Edit</button>
+                                    <form method="POST" action="{{ url_for('reset_machine', email=u.email) }}" class="inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button class="btn btn-sm">Unbind</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('reset_usage', email=u.email) }}" class="inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button class="btn btn-sm">Reset Usage</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('delete_user', email=u.email) }}" class="inline" onsubmit="return confirm('Delete {{ u.email }}?');">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <button class="btn btn-danger btn-sm">Delete</button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        <tr id="edit-{{ loop.index }}" class="hidden" style="background:var(--surface-2)">
+                            <td colspan="7">
+                                <form method="POST" action="{{ url_for('edit_user', email=u.email) }}" class="grid grid-cols-1 md:grid-cols-5 gap-3 items-end py-2">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <label class="field" style="margin:0"><span class="label">Name</span><input name="name" value="{{ u.name or '' }}"></label>
+                                    <label class="field" style="margin:0"><span class="label">Quota</span><input name="quota" value="{{ u.quota or 'Unlimited' }}"></label>
+                                    <label class="field" style="margin:0"><span class="label">Expiry Date</span><input name="expiry_date" value="{{ u.expiry_date or 'Lifetime' }}"></label>
+                                    <label class="field" style="margin:0"><span class="label">Expiry Time</span><input name="expiry_time" value="{{ u.expiry_time or '00:00' }}"></label>
+                                    <button type="submit" class="btn btn-ok">Save</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="7" class="text-center" style="color:var(--text-faint);padding:32px 0">No users yet. Add one above.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+</body>
+</html>

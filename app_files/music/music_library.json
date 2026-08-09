@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "notes": "Bundled tracks are locally synthesized original ambient beds. Replace or extend them only with music whose license proof is retained.",
+  "tracks": [
+    {"id": "circuit-calm", "file": "circuit-calm.mp3", "moods": ["tech"], "bpm": 84, "license": "generated-original"},
+    {"id": "digital-drift", "file": "digital-drift.mp3", "moods": ["tech"], "bpm": 92, "license": "generated-original"},
+    {"id": "warm-countertop", "file": "warm-countertop.mp3", "moods": ["home"], "bpm": 76, "license": "generated-original"},
+    {"id": "quiet-living", "file": "quiet-living.mp3", "moods": ["home"], "bpm": 72, "license": "generated-original"},
+    {"id": "steady-motion", "file": "steady-motion.mp3", "moods": ["fitness"], "bpm": 108, "license": "generated-original"},
+    {"id": "forward-energy", "file": "forward-energy.mp3", "moods": ["fitness"], "bpm": 116, "license": "generated-original"},
+    {"id": "soft-focus", "file": "soft-focus.mp3", "moods": ["beauty"], "bpm": 70, "license": "generated-original"},
+    {"id": "clean-glow", "file": "clean-glow.mp3", "moods": ["beauty"], "bpm": 78, "license": "generated-original"},
+    {"id": "minimal-luxe", "file": "minimal-luxe.mp3", "moods": ["premium"], "bpm": 68, "license": "generated-original"},
+    {"id": "neutral-bed", "file": "neutral-bed.mp3", "moods": ["general"], "bpm": 80, "license": "generated-original"}
+  ]
+}

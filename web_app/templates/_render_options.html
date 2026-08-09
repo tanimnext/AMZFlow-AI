@@ -1,0 +1,170 @@
+{# Shared render-options panel: voice, format, order, music, intro, output
+   root, speed. Included by both create_url.html and create_keywords.html so
+   the two modules never drift the way v6's single copy could not be reused
+   at all -- Module 2 had no access to it as a distinct flow. #}
+<section class="card" id="renderOptionsPanel" aria-labelledby="render-options-heading">
+    <div class="card-head">
+        <h2 id="render-options-heading" class="card-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94M4.5 12a7.5 7.5 0 1 1 15 0 7.5 7.5 0 0 1-15 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8.25v3.75l2.25 1.5"/></svg>
+            Render Options
+        </h2>
+        <span class="card-sub">Voice, format, and output — shared by both creation modules</span>
+    </div>
+    <div class="card-pad grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div class="space-y-3">
+            <p class="section-label">Voice</p>
+            <label class="field"><span class="label">TTS Provider</span>
+                <select id="tts_service"></select>
+            </label>
+            <div id="voiceKeyField" class="hint">API key is configured in Settings → Voice.</div>
+            <label class="field"><span class="label">Voice</span>
+                <div class="flex gap-2">
+                    <select id="voice_select" class="flex-1" data-setting="false"></select>
+                    <button type="button" id="voiceRefreshBtn" class="btn btn-icon" title="Refresh voice list" aria-label="Refresh voice list">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                    </button>
+                </div>
+                <!-- Real setting field: id is re-pointed at whichever
+                     per-provider field (edge_voice, kokoro_voice, ...) is
+                     active, so collectSettings() persists the choice made
+                     above via #voice_select, which is itself a UI-only proxy
+                     (data-setting=false) since its id isn't a real setting
+                     name shared across providers. -->
+                <input type="hidden" data-role="voice-hidden-field">
+                <span id="voiceSourceNote" class="hint"></span>
+            </label>
+            <div id="ratePitchControls" class="hidden"></div>
+            <div id="directorControls" class="hidden space-y-3"></div>
+            <label class="field"><span class="label">Preview text</span>
+                <input type="text" id="previewText" data-setting="false" placeholder="Optional — defaults to a sample line" maxlength="300"></label>
+            <button type="button" id="previewVoiceBtn" class="btn btn-primary w-full">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 0 1 0 1.971l-11.54 6.347a1.125 1.125 0 0 1-1.667-.985V5.653Z"/></svg>
+                Preview Voice
+            </button>
+        </div>
+
+        <div class="space-y-3">
+            <p class="section-label">Channel &amp; Affiliate</p>
+            <label class="field"><span class="label">Channel Name / Video Logo</span>
+                <input type="text" id="logo_text" placeholder="Your Channel Name"></label>
+            <label class="field"><span class="label">Channel URL</span>
+                <input type="text" id="channel_url" placeholder="https://youtube.com/@channel"></label>
+            <label class="field"><span class="label">Amazon Associate Tag</span>
+                <div class="flex gap-2">
+                    <select id="partnerTagPreset" data-setting="false" style="max-width:40%"></select>
+                    <input type="text" id="partner_tag" class="flex-1" placeholder="your-tag-20">
+                    <button type="button" id="savePartnerTagBtn" class="btn btn-icon" data-setting="false" title="Save this tag as a preset" aria-label="Save this tag as a preset">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z"/></svg>
+                    </button>
+                </div>
+                <span class="hint">Pick a saved tag, or type a new one and tap save to reuse it later.</span></label>
+            <label class="field"><span class="label">Website URL (for description)</span>
+                <input type="text" id="website_url" placeholder="https://example.com"></label>
+        </div>
+
+        <div class="space-y-3">
+            <p class="section-label">Format &amp; Playback</p>
+            <div class="switch-row">
+                <span class="switch-text">TikTok / Reels (9:16)</span>
+                <label class="switch"><input id="shorts_mode" type="checkbox"><span class="slider"></span></label>
+            </div>
+            <label class="field"><span class="label">Product sequence</span>
+                <select id="product_order">
+                    <option value="countdown">Countdown: last to first (N → 1)</option>
+                    <option value="list">List order: first to last (1 → N)</option>
+                </select></label>
+            <label class="field"><span class="label">Video Speed <b id="video_speed_out">1.00x</b></span>
+                <input id="video_speed" type="range" min="0.75" max="1.5" step="0.05" value="1.0">
+                <span class="hint">Applies to the whole rendered video (picture and narration together).</span></label>
+            <label class="field"><span class="label">Background music</span>
+                <select id="music_mode">
+                    <option value="auto">Auto-route licensed track</option>
+                    <option value="off">No background music</option>
+                </select></label>
+            <div class="switch-row">
+                <span class="switch-text">Use generic intro clip</span>
+                <label class="switch"><input id="enable_intro_clip" type="checkbox"><span class="slider"></span></label>
+            </div>
+        </div>
+    </div>
+
+    <div class="card-pad pt-0 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="flex items-center gap-4 flex-wrap">
+            <div class="flex items-center gap-2">
+                <span class="label" style="margin:0">Use Year</span>
+                <label class="switch"><input type="checkbox" id="use_year" checked><span class="slider"></span></label>
+            </div>
+            <input type="text" id="year" style="width:5.5rem" placeholder="2026">
+            <div class="flex items-center gap-2">
+                <span class="label" style="margin:0">Add "Best"</span>
+                <label class="switch"><input type="checkbox" id="use_best" checked><span class="slider"></span></label>
+            </div>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {% for id, label in [("show_affiliate","Affiliate Link"),("show_description","Description"),("show_keywords","Keywords"),("show_hashtags","Hashtags"),("show_disclaimer","Disclaimer")] %}
+            <div class="switch-row">
+                <span class="text-[11px]" style="color:var(--text-muted)">{{ label }}</span>
+                <label class="switch"><input type="checkbox" id="{{ id }}" checked><span class="slider"></span></label>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="card mt-5" aria-labelledby="workflow-heading">
+    <div class="card-head">
+        <h2 id="workflow-heading" class="card-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 9.776c0-.917.663-1.699 1.567-1.85l1.156-.194A48.7 48.7 0 0 1 12 7.5c1.87 0 3.712.146 5.517.232l1.166.194A1.878 1.878 0 0 1 20.25 9.776v8.474c0 .917-.663 1.699-1.567 1.85l-1.166.194A48.7 48.7 0 0 1 12 20.5c-1.87 0-3.702-.146-5.507-.232l-1.156-.194A1.878 1.878 0 0 1 3.75 18.25V9.776Z"/></svg>
+            Output &amp; Review Workflow
+        </h2>
+    </div>
+    <div class="card-pad grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="md:col-span-2">
+            <label class="field"><span class="label">Local project library folder</span>
+                <div class="flex gap-2">
+                    <input id="output_root" type="text" class="flex-1" placeholder="/Users/you/Videos/Amazon Reviews">
+                    <button type="button" id="browseOutputRootBtn" class="btn" data-setting="false">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-19.5 0v6a2.25 2.25 0 0 0 2.25 2.25h15a2.25 2.25 0 0 0 2.25-2.25v-6m-19.5 0V6a2.25 2.25 0 0 1 2.25-2.25h5.379a1.5 1.5 0 0 1 1.06.44l2.122 2.12a1.5 1.5 0 0 0 1.06.44H19.5A2.25 2.25 0 0 1 21.75 9v3.75"/></svg>
+                        Browse Folder
+                    </button>
+                </div></label>
+            <p class="hint">Each keyword folder keeps only Thumbnail.jpg, the keyword-named MP4, and youtube.txt.</p>
+        </div>
+        <div class="md:col-span-2">
+            <label class="field"><span class="label">Optional hands-on observations</span>
+                <textarea id="hands_on_notes" rows="3" placeholder="Only facts you personally observed: setup time, measured noise, fit, comfort, failure points..."></textarea></label>
+            <p class="hint">Without notes, the script is explicitly spec-based and will not claim personal testing.</p>
+        </div>
+        <label class="field"><span class="label">Review evidence</span>
+            <select id="content_mode">
+                <option value="spec_based">Spec-based review</option>
+                <option value="hands_on">Hands-on notes supplied</option>
+                <option value="buying_guide">Buying guide comparison</option>
+            </select></label>
+    </div>
+</section>
+
+<div class="flex justify-center py-5">
+    <button id="startBtn" class="btn btn-primary btn-lg" style="width:100%;max-width:640px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        Start AI Video Creation
+    </button>
+</div>
+
+<section class="card" aria-labelledby="log-heading">
+    <div class="card-head">
+        <h2 id="log-heading" class="card-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z"/></svg>
+            Activity Log
+        </h2>
+        <span id="videoCountDisplay" class="badge badge-brand">0/0</span>
+    </div>
+    <div class="card-pad">
+        <div class="flex justify-between text-[11px] mb-1" style="color:var(--text-faint)">
+            <span id="progressStatus">Idle</span>
+            <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress mb-3"><div id="progressBar" class="progress-fill" style="width:0%"></div></div>
+        <div id="logArea" class="log">Waiting for start...</div>
+    </div>
+</section>

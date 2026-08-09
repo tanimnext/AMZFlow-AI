@@ -1,0 +1,28 @@
+# User credentials and local runtime state
+.env
+.env.*
+*.pem
+*.key
+web_app/token_*.json
+web_app/config.json
+app_files/client_secrets*.json
+web_app/login_token.json
+web_app/uploaded_videos.json
+web_app/users.json
+web_app/.activated
+
+# Generated media, caches, and local environments
+files_created/
+web_app/static/previews/
+__pycache__/
+*.pyc
+venv/
+venv.broken/
+node_modules/
+.build-venv/
+build/
+dist/
+release/
+*.spec
+.DS_Store
+.claude/

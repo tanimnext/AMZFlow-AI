@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · {{ brand.name }}{% endblock %}
+
+{% block content %}
+<div class="mb-6">
+    <h1 class="text-[22px] font-extrabold" style="color:var(--text)">Welcome back{{ ', ' ~ user_name if user_name else '' }}</h1>
+    <p class="text-[13px]" style="color:var(--text-faint)">Pick a way to start a video, or check on what's already in the library.</p>
+</div>
+
+<div class="card mb-6">
+    <div class="card-pad flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-6">
+            <span class="flex items-center gap-2 text-[11px] uppercase font-bold" style="color:var(--text-faint)">
+                <span class="dot dot-ok"></span> License Verified
+            </span>
+            <span class="text-[11px] uppercase font-bold" style="color:var(--text-faint)">
+                Video Quota
+                <span class="badge {{ 'badge-error' if video_quota and current_videos >= video_quota else 'badge-brand' }}" id="total_quota_container">
+                    <span id="used_quota_display">{{ current_videos }}</span> / <span id="total_quota_val">{{ video_quota }}</span>
+                </span>
+            </span>
+            <span class="text-[11px] uppercase font-bold" style="color:var(--text-faint)">
+                Expires <span class="badge badge-neutral">{{ expiry_date }} {{ expiry_time }}</span>
+            </span>
+        </div>
+        {% if video_quota %}
+        {% set used_percent = (current_videos / video_quota * 100) | round | int %}
+        <div class="flex items-center gap-3">
+            <span id="quota_percent_text" class="text-[11px] font-bold" style="color:var(--text-faint)">{{ used_percent }}% used</span>
+            <div class="progress" style="width:8rem"><div id="dashboard_quota_bar" class="progress-fill" style="width:{{ used_percent if used_percent <= 100 else 100 }}%"></div></div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
+    <a href="{{ url_for('create_url_page') }}" class="card card-pad flex flex-col gap-2" style="text-decoration:none">
+        <div class="brand-mark" style="background:linear-gradient(135deg,var(--brand-500),var(--brand-600))">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"/></svg>
+        </div>
+        <span class="text-[16px] font-bold" style="color:var(--text)">URL to Video</span>
+        <span class="text-[13px]" style="color:var(--text-muted)">Paste authority-site review or roundup URLs. Products are extracted and verified automatically — you just approve.</span>
+        <span class="text-[12px] font-semibold" style="color:var(--brand-600)">Start from a URL →</span>
+    </a>
+    <a href="{{ url_for('create_keywords_page') }}" class="card card-pad flex flex-col gap-2" style="text-decoration:none">
+        <div class="brand-mark" style="background:linear-gradient(135deg,var(--ok-500),var(--ok-600))">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="18" height="18"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z"/></svg>
+        </div>
+        <span class="text-[16px] font-bold" style="color:var(--text)">Keywords / ASINs to Video</span>
+        <span class="text-[13px]" style="color:var(--text-muted)">You already know the products. Type a keyword and its ASINs, check them against Amazon, and generate.</span>
+        <span class="text-[12px] font-semibold" style="color:var(--ok-600)">Start from ASINs →</span>
+    </a>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+    <section class="card lg:col-span-1" aria-labelledby="health-heading">
+        <div class="card-head">
+            <h2 id="health-heading" class="card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75m6 2.25a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                Setup Health
+            </h2>
+            <span class="badge {{ 'badge-ok' if health.ready else 'badge-error' }}">{{ 'Ready' if health.ready else health.blockingCount ~ ' issue(s)' }}</span>
+        </div>
+        <div class="card-pad space-y-2">
+            {% for check in health.checks %}
+            <div class="flex items-start gap-2 text-[12px]">
+                <span class="dot {{ 'dot-ok' if check.ok else ('dot-warn' if check.severity == 'warn' else 'dot-error') }}" style="margin-top:5px"></span>
+                <div class="min-w-0">
+                    <span class="block font-semibold" style="color:var(--text)">{{ check.label }}</span>
+                    <span class="block" style="color:var(--text-faint)">{{ check.detail }}</span>
+                </div>
+            </div>
+            {% endfor %}
+            <a href="{{ url_for('settings_page') }}" class="btn btn-sm w-full mt-2">Open Settings</a>
+        </div>
+    </section>
+
+    <section class="card lg:col-span-2" aria-labelledby="recent-heading">
+        <div class="card-head">
+            <h2 id="recent-heading" class="card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                Recent Projects
+            </h2>
+            <a href="{{ url_for('studio_page') }}" class="text-[12px] font-semibold" style="color:var(--brand-600)">Open Studio →</a>
+        </div>
+        <div class="card-pad">
+            {% if recent_projects %}
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Project</th><th>Video</th><th>Thumbnail</th><th>Upload</th></tr></thead>
+                    <tbody>
+                        {% for project in recent_projects %}
+                        <tr>
+                            <td class="font-semibold" style="color:var(--text)">{{ project.keyword }}</td>
+                            <td>{% if project.hasVideo %}<span class="badge badge-ok">Ready</span>{% else %}<span class="badge badge-neutral">Missing</span>{% endif %}</td>
+                            <td>{% if project.hasThumbnail %}<span class="badge badge-ok">Ready</span>{% else %}<span class="badge badge-neutral">Missing</span>{% endif %}</td>
+                            <td>
+                                {% if project.uploadState == 'succeeded' %}<span class="badge badge-ok">Published</span>
+                                {% elif project.uploadState %}<span class="badge badge-warn">{{ project.uploadState }}</span>
+                                {% else %}<span class="badge badge-neutral">Not uploaded</span>{% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-[13px]" style="color:var(--text-faint)">No projects yet — start one from a URL or a keyword list above.</p>
+            {% endif %}
+        </div>
+    </section>
+</div>
+{% endblock %}

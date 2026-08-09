@@ -1,0 +1,889 @@
+/* AmzFlow AI design tokens + component layer.
+   Loaded after tailwind.min.css on every page. Every colour in the app comes
+   from a variable here -- no template should contain a raw hex value. */
+
+:root {
+    /* Brand: orange primary, green success, white surfaces. */
+    --brand-50: #fff7ed;
+    --brand-100: #ffedd5;
+    --brand-200: #fed7aa;
+    --brand-400: #fb923c;
+    --brand-500: #f97316;
+    --brand-600: #ea580c;
+    --brand-700: #c2410c;
+
+    --ok-50: #f0fdf4;
+    --ok-100: #dcfce7;
+    --ok-200: #bbf7d0;
+    --ok-500: #22c55e;
+    --ok-600: #16a34a;
+    --ok-700: #15803d;
+
+    --warn-50: #fffbeb;
+    --warn-500: #f59e0b;
+    --warn-700: #b45309;
+
+    --danger-50: #fef2f2;
+    --danger-500: #ef4444;
+    --danger-600: #dc2626;
+    --danger-700: #b91c1c;
+
+    /* Surfaces + text */
+    --surface: #ffffff;
+    --surface-2: #f8fafc;
+    --surface-3: #f1f5f9;
+    --text: #0f172a;
+    --text-muted: #475569;
+    --text-faint: #64748b;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-lg: 16px;
+    --shadow-card: 0 1px 2px rgba(15, 23, 42, .04), 0 4px 16px rgba(15, 23, 42, .06);
+    --shadow-pop: 0 8px 32px rgba(15, 23, 42, .14);
+    --ring: 0 0 0 3px rgba(249, 115, 22, .28);
+    --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* ---------------------------------------------------------------- base ---- */
+
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    background: var(--surface-2);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.55;
+    min-height: 100vh;
+    overflow-x: hidden;
+}
+
+a {
+    color: var(--brand-600);
+}
+
+::selection {
+    background: var(--brand-100);
+    color: var(--brand-700);
+}
+
+*:focus-visible {
+    outline: none;
+    box-shadow: var(--ring);
+    border-radius: var(--radius-sm);
+}
+
+/* Consistent scrollbars without hiding them (they are a real affordance in the
+   long log and voice-list panes). */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--surface-3);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border: 2px solid var(--surface-3);
+    border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-faint);
+}
+
+/* --------------------------------------------------------------- layout --- */
+
+.page {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 24px 20px 64px;
+}
+
+.page-narrow {
+    max-width: 880px;
+}
+
+@media (max-width: 640px) {
+    .page {
+        padding: 16px 12px 48px;
+    }
+}
+
+.appbar {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    background: rgba(255, 255, 255, .92);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 1px 0 rgba(15, 23, 42, .02);
+}
+
+/* A thin brand-to-success gradient rule under the whole bar -- the single
+   strongest, cheapest way to make the menubar read as "branded" rather than
+   a generic gray toolbar. */
+.appbar::after {
+    content: "";
+    display: block;
+    height: 3px;
+    background: linear-gradient(90deg, var(--brand-500), var(--brand-400) 45%, var(--ok-500));
+}
+
+.appbar-inner {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.appbar-scrolled {
+    box-shadow: 0 4px 20px rgba(15, 23, 42, .08);
+}
+
+.brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
+    box-shadow: 0 3px 10px rgba(234, 88, 12, .4);
+    flex: none;
+}
+
+.brand-name {
+    font-weight: 800;
+    font-size: 18px;
+    letter-spacing: -.015em;
+    color: var(--text);
+    line-height: 1.15;
+}
+
+.brand-tagline {
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--text-faint);
+}
+
+.version-pill {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--brand-50), var(--ok-50));
+    color: var(--brand-700);
+    border: 1px solid var(--brand-100);
+    vertical-align: middle;
+}
+
+/* Primary navigation tabs in the appbar. */
+.navlink {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-decoration: none;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    transition: background .12s ease, color .12s ease, transform .06s ease;
+}
+
+.navlink:hover {
+    background: var(--surface-3);
+    color: var(--text);
+}
+
+.navlink[aria-current="page"] {
+    background: linear-gradient(135deg, var(--brand-500), var(--brand-600));
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 2px 8px rgba(234, 88, 12, .3);
+}
+
+.navlink[aria-current="page"]:hover {
+    color: #fff;
+}
+
+/* ---------------------------------------------------------------- cards --- */
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+}
+
+.card-pad {
+    padding: 22px;
+}
+
+/* Aliases kept for the pages ported from v6's markup (Studio, activation,
+   unauthorized, admin) so their existing class names resolve to the new
+   light surfaces instead of being silently undefined. */
+.glass {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+}
+
+.card-inner {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+}
+
+/* v6 toggled visibility with `hidden flex` on the same element and relied on
+   generation order inside the compiled Tailwind file to decide which utility
+   won -- fragile by construction. `.modal-flex.hidden` is a compound selector
+   so it always beats either single class on specificity alone, independent of
+   stylesheet order. */
+.modal-flex {
+    display: flex;
+}
+
+.modal-flex.hidden {
+    display: none;
+}
+
+.card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--border);
+}
+
+.card-title {
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* Every card icon becomes a small colored chip instead of a bare stroke --
+   the single biggest lever for "the app looks flat/monochrome" feedback,
+   applied globally with no template changes. */
+.card-title svg:first-child {
+    color: var(--brand-600);
+    background: var(--brand-50);
+    border: 1px solid var(--brand-100);
+    border-radius: 8px;
+    padding: 5px;
+    box-sizing: content-box;
+    flex: none;
+}
+
+.card-sub {
+    font-size: 12.5px;
+    color: var(--text-faint);
+    margin-top: 2px;
+}
+
+.section-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--brand-600);
+    margin-bottom: 8px;
+}
+
+/* -------------------------------------------------------------- buttons --- */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 9px 16px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13.5px;
+    font-weight: 700;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: background .12s ease, border-color .12s ease, transform .06s ease, box-shadow .12s ease;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+    background: var(--surface-3);
+}
+
+.btn:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.btn:disabled {
+    opacity: .55;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: var(--brand-500);
+    border-color: var(--brand-500);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(234, 88, 12, .3);
+}
+
+.btn-primary:hover:not(:disabled) {
+    background: var(--brand-600);
+    border-color: var(--brand-600);
+}
+
+.btn-ok {
+    background: var(--ok-600);
+    border-color: var(--ok-600);
+    color: #fff;
+}
+
+.btn-ok:hover:not(:disabled) {
+    background: var(--ok-700);
+    border-color: var(--ok-700);
+}
+
+.btn-danger {
+    background: var(--surface);
+    border-color: var(--danger-500);
+    color: var(--danger-600);
+}
+
+.btn-danger:hover:not(:disabled) {
+    background: var(--danger-50);
+}
+
+.btn-ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--text-muted);
+}
+
+.btn-ghost:hover:not(:disabled) {
+    background: var(--surface-3);
+    color: var(--text);
+}
+
+.btn-lg {
+    padding: 13px 22px;
+    font-size: 15px;
+    border-radius: var(--radius);
+}
+
+.btn-sm {
+    padding: 5px 9px;
+    font-size: 12px;
+}
+
+.btn-icon {
+    padding: 6px;
+    width: 30px;
+    height: 30px;
+}
+
+/* --------------------------------------------------------------- fields --- */
+
+.field {
+    display: block;
+    margin-bottom: 14px;
+}
+
+.field > label,
+.label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+}
+
+.hint {
+    font-size: 11px;
+    color: var(--text-faint);
+    margin-top: 4px;
+}
+
+input[type="text"],
+input[type="url"],
+input[type="email"],
+input[type="number"],
+input[type="password"],
+input[type="search"],
+select,
+textarea {
+    width: 100%;
+    padding: 9px 12px;
+    font-size: 13.5px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    transition: border-color .12s ease, box-shadow .12s ease;
+}
+
+textarea {
+    line-height: 1.55;
+    resize: vertical;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: none;
+    border-color: var(--brand-500);
+    box-shadow: var(--ring);
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: #94a3b8;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+    background: var(--surface-3);
+    color: var(--text-faint);
+    cursor: not-allowed;
+}
+
+input[type="color"] {
+    padding: 2px;
+    height: 34px;
+    width: 44px;
+    min-width: 44px;
+    cursor: pointer;
+}
+
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--brand-500);
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, .25);
+}
+
+input[type="range"]:focus-visible {
+    box-shadow: var(--ring);
+}
+
+.mono {
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+/* Toggle switch -- one definition, previously duplicated with two different
+   knob geometries across index.html and settings.html. */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex: none;
+}
+
+.switch input {
+    position: absolute;
+    opacity: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    cursor: pointer;
+}
+
+.switch .slider {
+    position: absolute;
+    inset: 0;
+    background: var(--border-strong);
+    border-radius: 999px;
+    transition: background .18s ease;
+    pointer-events: none;
+}
+
+.switch .slider::before {
+    content: "";
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 3px;
+    top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, .3);
+    transition: transform .18s ease;
+}
+
+.switch input:checked + .slider {
+    background: var(--ok-600);
+}
+
+.switch input:checked + .slider::before {
+    transform: translateX(18px);
+}
+
+.switch input:focus-visible + .slider {
+    box-shadow: var(--ring);
+}
+
+.switch-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+}
+
+.switch-row .switch-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+/* --------------------------------------------------------------- badges --- */
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1px solid transparent;
+    white-space: nowrap;
+}
+
+.badge-ok {
+    background: var(--ok-50);
+    color: var(--ok-700);
+    border-color: var(--ok-200);
+}
+
+.badge-warn {
+    background: var(--warn-50);
+    color: var(--warn-700);
+    border-color: #fde68a;
+}
+
+.badge-error {
+    background: var(--danger-50);
+    color: var(--danger-700);
+    border-color: #fecaca;
+}
+
+.badge-brand {
+    background: var(--brand-50);
+    color: var(--brand-700);
+    border-color: var(--brand-100);
+}
+
+.badge-neutral {
+    background: var(--surface-3);
+    color: var(--text-muted);
+    border-color: var(--border);
+}
+
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex: none;
+}
+
+.dot-ok {
+    background: var(--ok-500);
+    box-shadow: 0 0 0 3px var(--ok-100);
+}
+
+.dot-error {
+    background: var(--danger-500);
+    box-shadow: 0 0 0 3px var(--danger-50);
+}
+
+.dot-warn {
+    background: var(--warn-500);
+    box-shadow: 0 0 0 3px var(--warn-50);
+}
+
+/* ------------------------------------------------------------- progress --- */
+
+.progress {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--surface-3);
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--brand-500), var(--ok-500));
+    transition: width .35s ease;
+}
+
+.log {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+    background: #0f172a;
+    color: #e2e8f0;
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    height: 320px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log::-webkit-scrollbar-track {
+    background: #1e293b;
+}
+
+.log::-webkit-scrollbar-thumb {
+    background: #475569;
+    border-color: #1e293b;
+}
+
+/* --------------------------------------------------------------- tables --- */
+
+.table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+table.data {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+table.data th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    background: var(--surface-2);
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+
+table.data td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+
+table.data tr:last-child td {
+    border-bottom: none;
+}
+
+table.data tbody tr:hover {
+    background: var(--surface-2);
+}
+
+/* --------------------------------------------------------------- modals --- */
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: rgba(15, 23, 42, .45);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+}
+
+.modal-backdrop[hidden] {
+    display: none;
+}
+
+.modal-panel {
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop);
+    width: 100%;
+    max-width: 520px;
+    max-height: 92vh;
+    overflow-y: auto;
+}
+
+.modal-wide {
+    max-width: 1100px;
+}
+
+/* ---------------------------------------------------------------- toast --- */
+
+#toastHost {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 80;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-end;
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--text);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-pop);
+    animation: toast-in .18s ease;
+    max-width: 380px;
+}
+
+.toast-ok {
+    background: var(--ok-600);
+}
+
+.toast-error {
+    background: var(--danger-600);
+}
+
+.toast-warn {
+    background: var(--warn-700);
+}
+
+@keyframes toast-in {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+}
+
+/* --------------------------------------------------------- audio player --- */
+
+#audioDock {
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    z-index: 70;
+    width: min(420px, calc(100vw - 32px));
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+    padding: 12px 14px;
+}
+
+#audioDock[hidden] {
+    display: none;
+}
+
+/* ---------------------------------------------------------------- utils --- */
+
+.spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    display: inline-block;
+    animation: spin .7s linear infinite;
+    flex: none;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.skeleton {
+    background: linear-gradient(90deg, var(--surface-3) 25%, #e9eef5 37%, var(--surface-3) 63%);
+    background-size: 400% 100%;
+    animation: shimmer 1.2s ease infinite;
+    border-radius: var(--radius-sm);
+}
+
+@keyframes shimmer {
+    from {
+        background-position: 100% 0;
+    }
+
+    to {
+        background-position: -100% 0;
+    }
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: .001ms !important;
+        transition-duration: .001ms !important;
+    }
+}

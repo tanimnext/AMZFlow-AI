@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}URL to Video · {{ brand.name }}{% endblock %}
+
+{% block content %}
+<div class="mb-5">
+    <h1 class="text-[22px] font-extrabold" style="color:var(--text)">URL to Video</h1>
+    <p class="text-[13px]" style="color:var(--text-faint)">Paste review or roundup article URLs. Products are extracted, verified against Amazon, and staged for your approval before anything renders.</p>
+</div>
+
+<section class="card mb-5" aria-labelledby="content-import-heading">
+    <div class="card-head">
+        <div>
+            <h2 id="content-import-heading" class="card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"/></svg>
+                Review URL Research Queue
+            </h2>
+            <p class="card-sub">Paste 1–20 HTTPS review or roundup URLs. Products stay in review until you approve them.</p>
+        </div>
+        <div id="contentBatchSummary" class="text-[12px]" style="color:var(--text-faint)" role="status" aria-live="polite">No active batch</div>
+    </div>
+    <div class="card-pad">
+        <div class="flex flex-col md:flex-row gap-3">
+            <textarea id="content_urls" data-setting="false" rows="4" class="flex-1"
+                placeholder="https://authority-site.com/best-robot-vacuums&#10;https://another-site.com/coffee-maker-reviews"></textarea>
+            <div class="md:w-52 flex flex-col gap-2">
+                <div class="flex items-center justify-between text-[12px]" style="color:var(--text-faint)">
+                    <span>URLs</span><span id="contentUrlCount">0 / 20</span>
+                </div>
+                <button id="analyzeContentBtn" type="button" class="btn btn-primary">Analyze URLs</button>
+                <button id="restoreLatestBtn" type="button" class="btn">Restore Latest</button>
+            </div>
+        </div>
+        <p id="contentBatchError" class="hidden mt-2 text-[12px]" style="color:var(--danger-600)" role="alert"></p>
+    </div>
+
+    <div id="contentReviewActions" class="hidden card-pad pt-0 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap gap-2">
+            <button id="approveAllBtn" type="button" class="btn btn-ok btn-sm">Approve All Ready</button>
+            <button id="refreshBatchBtn" type="button" class="btn btn-sm">Refresh</button>
+        </div>
+        <button id="generateApprovedBtn" type="button" class="btn btn-primary btn-sm">Generate Approved</button>
+    </div>
+
+    <div id="contentReviewTable" class="hidden table-wrap mx-5 mb-5" style="width:calc(100% - 2.5rem)">
+        <table class="data" style="min-width:820px">
+            <thead>
+                <tr>
+                    <th>Source</th><th>Video Keyword</th><th>Type</th><th class="text-center">Products</th>
+                    <th class="text-center">Confidence</th><th>Revenue</th><th>Status</th><th class="text-right">Review</th>
+                </tr>
+            </thead>
+            <tbody id="contentReviewBody"></tbody>
+        </table>
+    </div>
+</section>
+
+{% include "_render_options.html" %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    window.__AF_TTS_REGISTRY = {{ (tts_providers if tts_providers is defined else []) | tojson }};
+    window.__AF_DIRECTOR_OPTIONS = {{ (director_options if director_options is defined else {}) | tojson }};
+    window.__AF_PARTNER_TAGS = {{ (partner_tags if partner_tags is defined else []) | tojson }};
+</script>
+<script src="{{ url_for('static', filename='js/creation.js') }}"></script>
+{% endblock %}

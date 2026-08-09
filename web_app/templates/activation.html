@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Activate · {{ brand.name }}{% endblock %}
+
+{% block chrome %}{% endblock %}
+{% block footer %}{% endblock %}
+
+{% block page_class %}flex items-center justify-center{% endblock %}
+
+{% block content %}
+<div class="max-w-md w-full mx-auto" style="padding-top:8vh">
+    <div class="card card-pad text-center" style="padding:2.5rem">
+        <div class="inline-flex mb-6" style="animation:float 6s ease-in-out infinite">
+            <div class="brand-mark" style="width:64px;height:64px;border-radius:20px">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="32" height="32">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                </svg>
+            </div>
+        </div>
+
+        <h1 class="text-[26px] font-extrabold mb-1" style="color:var(--text)">Product Activation</h1>
+        <p class="text-[13px] mb-6" style="color:var(--text-faint)">Enter your registered details to activate {{ brand.name }}.</p>
+
+        <form id="activationForm" class="space-y-3 text-left">
+            <label class="field"><span class="label">Full Name</span>
+                <input type="text" id="name" required placeholder="Your Full Name" autocomplete="name"></label>
+            <label class="field"><span class="label">Registered Email</span>
+                <input type="email" id="email" required placeholder="you@example.com" autocomplete="email"></label>
+            <button type="submit" id="submitBtn" class="btn btn-primary btn-lg w-full">
+                <span>Activate Software</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+            </button>
+        </form>
+
+        <p id="errorMsg" class="hidden mt-4 p-3 rounded-lg text-[13px]" style="background:var(--danger-50);border:1px solid #fecaca;color:var(--danger-700)" role="alert"></p>
+    </div>
+    <p class="text-center text-[12px] mt-6" style="color:var(--text-faint)">{{ brand.name }} {{ brand.version }}</p>
+</div>
+
+<style>
+    @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.getElementById('activationForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = document.getElementById('email').value;
+        const name = document.getElementById('name').value;
+        const btn = document.getElementById('submitBtn');
+        const error = document.getElementById('errorMsg');
+
+        error.classList.add('hidden');
+        await AF.withBusy(btn, 'Checking…', async () => {
+            try {
+                const data = await AF.api('/activate', { body: { email, name } });
+                if (data.success) {
+                    window.location.href = '/';
+                    return;
+                }
+                error.textContent = data.error || 'Activation failed';
+                error.classList.remove('hidden');
+            } catch (err) {
+                error.textContent = err.message || 'Network error. Please try again.';
+                error.classList.remove('hidden');
+            }
+        });
+    });
+</script>
+{% endblock %}
