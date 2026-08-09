@@ -11,6 +11,8 @@
   SHA-256 validation, safe archive extraction, external replacement, and restart.
 - Native manual build launchers (`BuildDist.command` and `BuildDist.bat`) and
   GitHub Actions workflows for CI and two-platform releases.
+- Windows-first `BuildDist.command` release flow with optional macOS build,
+  native GitHub runners, automatic Release publication, and artifact download.
 - Local Git repository, release documentation, portable-runtime tests, and a
   single semantic `VERSION` source.
 

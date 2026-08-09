@@ -47,13 +47,16 @@ opens the local Flask application on `http://127.0.0.1:7503`.
 | `venv/bin/python3 -m pip check` | Verify installed dependencies |
 | `npm run build:css` | Rebuild the local Tailwind UI CSS (run after any template edit) |
 | `./admin_dashboard.command` | Local license/user admin dashboard (port 7510) |
-| `./BuildDist.command 7.1.0` | Build a macOS portable release ZIP |
+| Double-click `BuildDist.command` | Build/publish Windows by default; macOS is optional |
+| `./BuildDist.command 7.1.0 windows` | Non-interactive Windows release build |
+| `./BuildDist.command 7.1.0 both` | Non-interactive Windows + macOS release build |
 | `BuildDist.bat 7.1.0` | Build a Windows portable release ZIP |
 
-Windows must be built on Windows and macOS on macOS. To create both downloads,
-push the repository to GitHub and run **Release portable desktop apps** from
-the Actions tab with an `X.Y.Z` version. The workflow builds both native apps,
-creates checksum files, and publishes a GitHub Release.
+`BuildDist.command` uses native GitHub-hosted runners, publishes the GitHub
+Release used by auto-update, and downloads the finished ZIP/checksum to
+`release/`. The first run needs a pushed GitHub repository and `gh auth login`;
+see [GitHub release setup](docs/GITHUB_RELEASES.md). `BuildDist.bat` remains an
+offline/local Windows-only alternative when run on a Windows development PC.
 
 ## Two Creation Modules
 

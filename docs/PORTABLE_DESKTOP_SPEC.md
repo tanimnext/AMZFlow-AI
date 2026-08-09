@@ -18,7 +18,9 @@ and restart the app.
 
 ## Commands
 
-- macOS local ZIP: `./BuildDist.command 7.1.0`
+- Windows-first native GitHub release: double-click `BuildDist.command`
+- Scripted Windows release: `./BuildDist.command 7.1.0 windows`
+- Scripted Windows + macOS release: `./BuildDist.command 7.1.0 both`
 - Windows local ZIP: `BuildDist.bat 7.1.0`
 - Tests: `venv/bin/python3 -m unittest discover -s tests -v`
 - Compile: `venv/bin/python3 -m compileall app_files web_app scripts`
@@ -32,6 +34,7 @@ and restart the app.
 - `web_app/runtime_support.py`: frozen/source paths and bundled binaries
 - `web_app/update_manager.py`: release lookup, download, checksum, handoff
 - `scripts/build_dist.py`: local/CI PyInstaller and ZIP builder
+- `scripts/remote_release.py`: safe GitHub dispatch, wait, and artifact download
 - `.github/workflows/`: test and two-platform release automation
 - `dist/`: ignored local release output
 
@@ -58,8 +61,9 @@ if asset and is_newer(asset.version, current_version()):
 
 - Always: store user settings/OAuth/output outside the install directory;
   verify release SHA-256 before replacement; build each OS on that OS.
-- Ask first: code-signing identities, notarization credentials, publishing a
-  real GitHub release, or changing customer credentials.
+- Ask first: code-signing identities, notarization credentials, or changing
+  customer credentials. Running `BuildDist.command` explicitly authorizes its
+  clearly displayed GitHub Release publication.
 - Never: bundle secrets, copy the developer venv, update from an unverified
   archive, or delete user data during an app upgrade.
 
@@ -76,7 +80,9 @@ if asset and is_newer(asset.version, current_version()):
 5. The updater selects only the current platform asset, validates its matching
    `.sha256` asset, waits for the app to stop, replaces only the install bundle,
    and restarts it.
-6. `BuildDist.command` and `BuildDist.bat` create a versioned ZIP on the host OS.
+6. `BuildDist.command` builds Windows by default on a native runner, optionally
+   builds macOS, publishes the release, and downloads its versioned artifacts.
+   `BuildDist.bat` creates a local Windows ZIP on a Windows development PC.
 7. Generated output, venvs, node modules, build output, credentials, and caches
    are excluded from Git.
 

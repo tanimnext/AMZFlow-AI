@@ -7,6 +7,43 @@ from pathlib import Path
 
 
 class DesktopDistributionTests(unittest.TestCase):
+    def test_remote_release_command_defaults_to_windows(self):
+        from scripts.remote_release import workflow_dispatch_args
+
+        self.assertEqual(
+            workflow_dispatch_args("7.2.0", "windows", "main"),
+            [
+                "gh",
+                "workflow",
+                "run",
+                "release.yml",
+                "--ref",
+                "main",
+                "-f",
+                "version=7.2.0",
+                "-f",
+                "platforms=windows",
+            ],
+        )
+
+    def test_remote_release_rejects_invalid_version_and_platform(self):
+        from scripts.remote_release import validate_platforms, validate_version
+
+        for invalid in ("v7.2.0", "7.2", "new version", "7.2.0; bad"):
+            with self.subTest(version=invalid):
+                with self.assertRaises(ValueError):
+                    validate_version(invalid)
+        with self.assertRaises(ValueError):
+            validate_platforms("linux")
+
+    def test_remote_release_selects_expected_artifacts(self):
+        from scripts.remote_release import artifact_names
+
+        self.assertEqual(artifact_names("windows"), ["portable-Windows"])
+        self.assertEqual(
+            artifact_names("both"), ["portable-Windows", "portable-macOS"]
+        )
+
     def test_artifact_name_is_stable_and_has_no_spaces(self):
         from scripts.build_dist import artifact_base
 

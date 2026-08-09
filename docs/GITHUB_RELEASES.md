@@ -6,10 +6,9 @@ This folder is already initialized as a local Git repository. Create an empty
 public GitHub repository, then run:
 
 ```bash
-git add .
-git commit -m "feat: add portable desktop distribution"
 git remote add origin https://github.com/YOUR_ACCOUNT/YOUR_REPOSITORY.git
 git push -u origin main
+gh auth login
 ```
 
 Do not add API keys, OAuth JSON, generated videos, `venv`, `node_modules`, or
@@ -18,12 +17,24 @@ every commit.
 
 ## Create a release
 
-The easiest route is GitHub → Actions → **Release portable desktop apps** →
-**Run workflow**, then enter a version such as `7.1.0`. It builds on native
-Windows and macOS runners and publishes:
+On macOS, double-click `BuildDist.command`, enter the **New Version**, and choose
+whether macOS should also be built. Windows is selected by default. The command:
+
+1. checks that GitHub login, `origin`, commits, and push state are ready;
+2. starts native GitHub runners (never cross-compiles Windows on a Mac);
+3. embeds Python, packages, FFmpeg/ffprobe, models, voices, and app assets;
+4. publishes a GitHub Release for the built-in auto-updater; and
+5. downloads the ZIP and SHA-256 file into the local `release/` folder.
+
+The source must be committed and pushed before clicking the builder. This makes
+the local files and the source used by the Windows runner identical.
+
+The browser alternative is GitHub → Actions → **Release portable desktop
+apps** → **Run workflow**. Enter a version such as `7.1.0`, then choose Windows,
+macOS, or both. It publishes the selected native artifacts:
 
 - `AmzFlow-AI-X.Y.Z-windows-x64.zip` and `.sha256`
-- `AmzFlow-AI-X.Y.Z-macos-arm64.zip` and `.sha256`
+- optionally, `AmzFlow-AI-X.Y.Z-macos-arm64.zip` and `.sha256`
 
 Alternatively, update `VERSION` and `package.json`, commit, and push a semantic
 tag:

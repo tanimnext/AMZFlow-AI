@@ -7,6 +7,15 @@ on:
         description: "Semantic version (for example 7.1.0)"
         required: true
         type: string
+      platforms:
+        description: "Native platforms to build"
+        required: true
+        default: windows
+        type: choice
+        options:
+          - windows
+          - both
+          - macos
   push:
     tags: ["v*.*.*"]
 
@@ -14,11 +23,28 @@ permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      os: ${{ steps.matrix.outputs.os }}
+    steps:
+      - name: Select native runners
+        id: matrix
+        shell: bash
+        run: |
+          case "${{ inputs.platforms }}" in
+            windows) os='["windows-latest"]' ;;
+            macos) os='["macos-14"]' ;;
+            *) os='["windows-latest","macos-14"]' ;;
+          esac
+          echo "os=${os}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-14]
+        os: ${{ fromJSON(needs.prepare.outputs.os) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -55,7 +81,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
