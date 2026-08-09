@@ -76,6 +76,16 @@ export async function issueActivationToken(
   return `v1.${payload}.${toBase64Url(await sign(`v1.${payload}`, secret))}`;
 }
 
+export function readUnverifiedTokenEmail(token: string): string {
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1" || token.length > 4096) throw new Error("Invalid activation token");
+  const claims = JSON.parse(new TextDecoder().decode(fromBase64Url(parts[1]))) as unknown;
+  if (typeof claims !== "object" || claims === null || !("email" in claims) || typeof claims.email !== "string") {
+    throw new Error("Invalid activation token");
+  }
+  return claims.email.trim().toLowerCase();
+}
+
 export async function verifyActivationToken(
   token: string,
   machineId: string,
