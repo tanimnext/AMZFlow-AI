@@ -146,7 +146,7 @@ docs/                      Deployment, migration, and rollback instructions
 ```bash
 npm --prefix license-worker test
 npm --prefix license-worker run typecheck
-npx wrangler deploy --config license-worker/wrangler.toml
+npx wrangler deploy --config license-worker/wrangler.jsonc
 venv/bin/python3 -m unittest discover -s tests -v
 ./BuildDist.command 7.1.1 windows
 ```
@@ -199,3 +199,10 @@ direct client access to Google credentials.
 
 The one-time activation-code requirement and one-time re-activation of existing
 users were approved on 2026-08-09.
+
+## Deployment Status
+
+Production was deployed on 2026-08-10 at
+`https://amzflow-license-api.tanimnext2.workers.dev`. Google Sheet columns I-J
+were migrated, the existing license was reactivated through the API, and local
+Google service-account files were removed after end-to-end verification.
