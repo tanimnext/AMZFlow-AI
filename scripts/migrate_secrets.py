@@ -16,7 +16,6 @@ from secure_paths import (
     KEYWORDS_FILE,
     LOGIN_TOKEN_FILE,
     OAUTH_DIR,
-    SERVICE_ACCOUNT_FILE,
     SETTINGS_FILE,
     UPLOADED_VIDEOS_FILE,
 )
@@ -55,15 +54,12 @@ def main() -> None:
             encoding="utf-8",
         )
 
-    for service_account in (ROOT / "web_app").glob("config*.json"):
-        target = (
-            SERVICE_ACCOUNT_FILE
-            if service_account.name == "config.json"
-            else DATA_DIR / "legacy_credentials" / service_account.name
+    service_accounts = list((ROOT / "web_app").glob("config*.json"))
+    if service_accounts:
+        raise RuntimeError(
+            "Google service-account files are server-side secrets. Upload them "
+            "to the license Worker, then remove them from the project."
         )
-        if not target.exists():
-            private_copy(service_account, target)
-        service_account.unlink()
 
     for pattern in ("token_*.json",):
         for source in (ROOT / "web_app").glob(pattern):

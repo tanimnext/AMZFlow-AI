@@ -75,7 +75,6 @@ def data_dir() -> Path:
 
 DATA_DIR = data_dir()
 SETTINGS_FILE = DATA_DIR / "settings.json"
-SERVICE_ACCOUNT_FILE = DATA_DIR / "config.json"
 OAUTH_DIR = DATA_DIR / "youtube_oauth"
 ACTIVATION_FILE = DATA_DIR / ".activated"
 UPLOADED_VIDEOS_FILE = DATA_DIR / "uploaded_videos.json"

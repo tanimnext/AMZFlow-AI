@@ -177,7 +177,13 @@ def list_users():
     if not success:
         return []
     try:
-        return [_license(user) | {"machine_id": "", "last_login": ""} for user in payload["data"]]
+        users = []
+        for user in payload["data"]:
+            users.append(_license(user) | {
+                "machine_id": str(user.get("machineId", "")),
+                "last_login": str(user.get("lastLogin", "")),
+            })
+        return users
     except (KeyError, TypeError, ValueError):
         return []
 
