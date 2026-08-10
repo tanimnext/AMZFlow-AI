@@ -66,6 +66,20 @@ test("invalid activation attempts have one generic response", async () => {
   assert.deepEqual(await unknown.json(), await wrongCode.json());
 });
 
+test("internal failures emit safe structured diagnostics", async () => {
+  const events: unknown[] = [];
+  const store = new FakeStore(null);
+  store.findByEmail = async () => { throw new Error("Google authentication failed"); };
+  const app = createApp({ store, signingSecret: secret, logger: (event) => events.push(event) });
+  const response = await app(post("/v1/activations", {
+    email: "private@example.com", name: "Private Name", machineId: "machine-id-123", activationCode: "private-code",
+  }));
+  assert.equal(response.status, 500);
+  const serialized = JSON.stringify(events);
+  assert.match(serialized, /license_api_error|Google authentication failed/);
+  assert.doesNotMatch(serialized, /private@example|Private Name|private-code/);
+});
+
 test("verification requires a valid token and current machine", async () => {
   const store = await fixture();
   const app = createApp({ store, signingSecret: secret });
@@ -95,6 +109,19 @@ test("admin endpoints reject missing or incorrect bearer tokens", async () => {
   const app = createApp({ store: await fixture(), signingSecret: secret, adminToken: "test-admin-token-with-enough-entropy" });
   assert.equal((await app(new Request("https://license.test/v1/admin/users"))).status, 401);
   assert.equal((await app(new Request("https://license.test/v1/admin/users", { headers: { authorization: "Bearer wrong-token" } }))).status, 401);
+});
+
+test("admin list includes machine metadata but never activation hashes", async () => {
+  const store = await fixture();
+  store.user!.machineId = "machine-id-123";
+  const adminToken = "test-admin-token-with-enough-entropy";
+  const app = createApp({ store, signingSecret: secret, adminToken });
+  const response = await app(new Request("https://license.test/v1/admin/users", {
+    headers: { authorization: `Bearer ${adminToken}` },
+  }));
+  const text = await response.text();
+  assert.match(text, /machine-id-123/);
+  assert.doesNotMatch(text, /activationCodeHash|test-only-signing/);
 });
 
 test("admin can create a user and receives the activation code only once", async () => {

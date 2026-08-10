@@ -49,7 +49,8 @@ export class GoogleSheetsStore implements LicenseStore {
 
   private async request(path: string, init?: RequestInit): Promise<unknown> {
     const token = await this.getAccessToken();
-    const response = await this.fetcher(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}${path}`, {
+    const fetcher = this.fetcher;
+    const response = await fetcher(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}${path}`, {
       ...init,
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...(init?.headers || {}) },
     });

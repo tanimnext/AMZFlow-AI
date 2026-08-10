@@ -13,6 +13,7 @@ interface AppDependencies {
   signingSecret: string;
   adminToken?: string;
   now?: () => Date;
+  logger?: (event: Record<string, unknown>) => void;
 }
 
 class ApiError extends Error {
@@ -55,6 +56,13 @@ function licenseView(user: LicenseRecord) {
   return {
     email: user.email, name: user.name, used: user.used, quota: user.quota,
     expiryDate: user.expiryDate, expiryTime: user.expiryTime,
+  };
+}
+
+function adminView(user: LicenseRecord) {
+  return {
+    ...licenseView(user), machineId: user.machineId, lastLogin: user.lastLogin,
+    tokenVersion: user.tokenVersion,
   };
 }
 
@@ -158,8 +166,11 @@ function adminEmail(pathname: string, suffix = ""): string | null {
 
 export function createApp(deps: AppDependencies): (request: Request) => Promise<Response> {
   return async (request: Request) => {
+    const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
+    let route = "unknown";
     try {
       const { pathname } = new URL(request.url);
+      route = pathname.startsWith("/v1/admin/users/") ? "/v1/admin/users/:action" : pathname;
       if (request.method === "GET" && pathname === "/v1/health") {
         return json({ data: { status: "ok", apiVersion: "v1" } });
       }
@@ -170,7 +181,7 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
         const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
         const pageSize = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
         const result = await deps.store.list(page, pageSize);
-        return json({ data: result.users.map(licenseView), pagination: { page, pageSize, totalItems: result.total } });
+        return json({ data: result.users.map(adminView), pagination: { page, pageSize, totalItems: result.total } });
       }
       const directAdminEmail = adminEmail(pathname);
       if (request.method === "PATCH" && directAdminEmail) {
@@ -178,7 +189,7 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
         if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
         Object.assign(user, parseUserPatch(await readJson(request)));
         await deps.store.save(user);
-        return json({ data: { user: licenseView(user) } });
+        return json({ data: { user: adminView(user) } });
       }
       if (request.method === "DELETE" && directAdminEmail) {
         if (!await deps.store.findByEmail(directAdminEmail)) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
@@ -191,7 +202,7 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
         if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
         user.used = 0;
         await deps.store.save(user);
-        return json({ data: { user: licenseView(user) } });
+        return json({ data: { user: adminView(user) } });
       }
       const activationCodeEmail = adminEmail(pathname, "/activation-code");
       if (request.method === "POST" && activationCodeEmail) {
@@ -201,7 +212,7 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
         user.tokenVersion += 1;
         user.activationCodeHash = await hashActivationCode(code, user.email, deps.signingSecret);
         await deps.store.save(user);
-        return json({ data: { user: licenseView(user), activationCode: code } });
+        return json({ data: { user: adminView(user), activationCode: code } });
       }
       if (request.method !== "POST") throw new ApiError(404, "NOT_FOUND", "Resource not found.");
 
@@ -214,7 +225,7 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
           activationCodeHash: await hashActivationCode(code, input.email, deps.signingSecret),
         };
         await deps.store.create(user);
-        return json({ data: { user: licenseView(user), activationCode: code } }, 201);
+        return json({ data: { user: adminView(user), activationCode: code } }, 201);
       }
 
       const resetMachineMatch = pathname.match(/^\/v1\/admin\/users\/([^/]+)\/reset-machine$/);
@@ -227,7 +238,7 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
         user.tokenVersion += 1;
         user.activationCodeHash = await hashActivationCode(code, email, deps.signingSecret);
         await deps.store.save(user);
-        return json({ data: { user: licenseView(user), activationCode: code } });
+        return json({ data: { user: adminView(user), activationCode: code } });
       }
 
       if (pathname === "/v1/activations") {
@@ -270,6 +281,12 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
       throw new ApiError(404, "NOT_FOUND", "Resource not found.");
     } catch (error) {
       if (error instanceof ApiError) return json({ error: { code: error.code, message: error.message } }, error.status);
+      const event = {
+        event: "license_api_error", requestId, route,
+        errorType: error instanceof Error ? error.name : "UnknownError",
+        errorMessage: error instanceof Error ? error.message.slice(0, 160) : "Unknown failure",
+      };
+      (deps.logger ?? ((value) => console.error(JSON.stringify(value))))(event);
       return json({ error: { code: "INTERNAL_ERROR", message: "The service is temporarily unavailable." } }, 500);
     }
   };

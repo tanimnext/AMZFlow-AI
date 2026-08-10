@@ -7,13 +7,15 @@ const row = ["Customer", "user@example.com", "machine-1", "2026-08-09", "2", "5"
 
 test("Google Sheet rows are validated and mapped from A:J", async () => {
   const requests: Request[] = [];
+  async function strictFetcher(this: unknown, input: RequestInfo | URL, init?: RequestInit) {
+    assert.equal(this, undefined);
+    requests.push(new Request(input, init));
+    return Response.json({ values: [["Name", "Email"], row] });
+  }
   const store = new GoogleSheetsStore({
     spreadsheetId: "sheet-id-123",
     getAccessToken: async () => "access-token",
-    fetcher: async (input, init) => {
-      requests.push(new Request(input, init));
-      return Response.json({ values: [["Name", "Email"], row] });
-    },
+    fetcher: strictFetcher,
   });
   const user = await store.findByEmail("user@example.com");
   assert.equal(user?.quota, 5);

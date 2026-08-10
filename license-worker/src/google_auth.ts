@@ -69,7 +69,7 @@ export function createGoogleAccessTokenProvider(
       assertion: await assertion(credentials, now()),
     });
     const response = await fetcher(TOKEN_URL, {
-      method: "POST", redirect: "error", signal: AbortSignal.timeout(10_000),
+      method: "POST", redirect: "manual", signal: AbortSignal.timeout(10_000),
       headers: { "content-type": "application/x-www-form-urlencoded" }, body,
     });
     if (!response.ok) {

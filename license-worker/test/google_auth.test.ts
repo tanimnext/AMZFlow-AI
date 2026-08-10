@@ -23,6 +23,7 @@ test("service-account JWT uses RS256 and access tokens are cached", async () => 
   let calls = 0;
   const provider = createGoogleAccessTokenProvider(credentials, async (_input, init) => {
     calls += 1;
+    assert.equal(init?.redirect, "manual");
     const form = new URLSearchParams(String(init?.body));
     assert.equal(form.get("grant_type"), "urn:ietf:params:oauth:grant-type:jwt-bearer");
     const parts = form.get("assertion")!.split(".");
