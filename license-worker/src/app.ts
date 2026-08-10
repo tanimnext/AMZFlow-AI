@@ -1,4 +1,5 @@
 import {
+  hashActivationCode,
   issueActivationToken,
   readUnverifiedTokenEmail,
   verifyActivationCode,
@@ -10,6 +11,7 @@ import { parseActivationRequest, parseMachineRequest, parseUsageRequest } from "
 interface AppDependencies {
   store: LicenseStore;
   signingSecret: string;
+  adminToken?: string;
   now?: () => Date;
 }
 
@@ -79,6 +81,81 @@ async function authorizedUser(request: Request, machineId: string, deps: AppDepe
   } catch { throw INVALID_LICENSE; }
 }
 
+async function requireAdmin(request: Request, expected = ""): Promise<void> {
+  try {
+    if (expected.length < 32) throw new Error("Invalid admin configuration");
+    const candidate = bearerToken(request);
+    const key = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode(expected), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"],
+    );
+    const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(expected));
+    if (!await crypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(candidate))) throw new Error("Invalid admin token");
+  } catch { throw new ApiError(401, "UNAUTHORIZED", "Admin authorization is required."); }
+}
+
+function activationCode(): string {
+  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const value = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+  return value.match(/.{4}/g)!.join("-");
+}
+
+function parseNewUser(value: unknown) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+  const input = value as Record<string, unknown>;
+  const allowed = new Set(["name", "email", "quota", "expiryDate", "expiryTime"]);
+  if (Object.keys(input).some((key) => !allowed.has(key)) || typeof input.name !== "string" || typeof input.email !== "string") {
+    throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+  }
+  const name = input.name.trim();
+  const email = input.email.trim().toLowerCase();
+  const quota = input.quota === "Unlimited" ? "Unlimited" : input.quota;
+  const expiryDate = input.expiryDate ?? "Lifetime";
+  const expiryTime = input.expiryTime ?? "00:00";
+  if (!name || name.length > 120 || !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}$/.test(email) ||
+      (quota !== "Unlimited" && (!Number.isSafeInteger(quota) || (quota as number) < 1)) ||
+      typeof expiryDate !== "string" || typeof expiryTime !== "string" ||
+      (expiryDate !== "Lifetime" && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) || !/^\d{2}:\d{2}$/.test(expiryTime)) {
+    throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+  }
+  return { name, email, quota: quota as number | "Unlimited", expiryDate, expiryTime };
+}
+
+function parseUserPatch(value: unknown): Partial<Pick<LicenseRecord, "name" | "quota" | "expiryDate" | "expiryTime">> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+  const input = value as Record<string, unknown>;
+  const allowed = new Set(["name", "quota", "expiryDate", "expiryTime"]);
+  if (!Object.keys(input).length || Object.keys(input).some((key) => !allowed.has(key))) {
+    throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+  }
+  const patch: Partial<Pick<LicenseRecord, "name" | "quota" | "expiryDate" | "expiryTime">> = {};
+  if (input.name !== undefined) {
+    if (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 120) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+    patch.name = input.name.trim();
+  }
+  if (input.quota !== undefined) {
+    if (input.quota !== "Unlimited" && (!Number.isSafeInteger(input.quota) || (input.quota as number) < 1)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+    patch.quota = input.quota as number | "Unlimited";
+  }
+  if (input.expiryDate !== undefined) {
+    if (typeof input.expiryDate !== "string" || (input.expiryDate !== "Lifetime" && !/^\d{4}-\d{2}-\d{2}$/.test(input.expiryDate))) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+    patch.expiryDate = input.expiryDate;
+  }
+  if (input.expiryTime !== undefined) {
+    if (typeof input.expiryTime !== "string" || !/^\d{2}:\d{2}$/.test(input.expiryTime)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+    patch.expiryTime = input.expiryTime;
+  }
+  return patch;
+}
+
+function adminEmail(pathname: string, suffix = ""): string | null {
+  const expression = new RegExp(`^/v1/admin/users/([^/]+)${suffix}$`);
+  const match = pathname.match(expression);
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]).trim().toLowerCase(); }
+  catch { throw new ApiError(400, "INVALID_REQUEST", "Request path is invalid."); }
+}
+
 export function createApp(deps: AppDependencies): (request: Request) => Promise<Response> {
   return async (request: Request) => {
     try {
@@ -86,7 +163,72 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
       if (request.method === "GET" && pathname === "/v1/health") {
         return json({ data: { status: "ok", apiVersion: "v1" } });
       }
+      const isAdmin = pathname === "/v1/admin/users" || pathname.startsWith("/v1/admin/users/");
+      if (isAdmin) await requireAdmin(request, deps.adminToken);
+      if (request.method === "GET" && pathname === "/v1/admin/users") {
+        const url = new URL(request.url);
+        const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
+        const pageSize = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
+        const result = await deps.store.list(page, pageSize);
+        return json({ data: result.users.map(licenseView), pagination: { page, pageSize, totalItems: result.total } });
+      }
+      const directAdminEmail = adminEmail(pathname);
+      if (request.method === "PATCH" && directAdminEmail) {
+        const user = await deps.store.findByEmail(directAdminEmail);
+        if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+        Object.assign(user, parseUserPatch(await readJson(request)));
+        await deps.store.save(user);
+        return json({ data: { user: licenseView(user) } });
+      }
+      if (request.method === "DELETE" && directAdminEmail) {
+        if (!await deps.store.findByEmail(directAdminEmail)) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+        await deps.store.delete(directAdminEmail);
+        return new Response(null, { status: 204, headers: SECURITY_HEADERS });
+      }
+      const resetUsageEmail = adminEmail(pathname, "/reset-usage");
+      if (request.method === "POST" && resetUsageEmail) {
+        const user = await deps.store.findByEmail(resetUsageEmail);
+        if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+        user.used = 0;
+        await deps.store.save(user);
+        return json({ data: { user: licenseView(user) } });
+      }
+      const activationCodeEmail = adminEmail(pathname, "/activation-code");
+      if (request.method === "POST" && activationCodeEmail) {
+        const user = await deps.store.findByEmail(activationCodeEmail);
+        if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+        const code = activationCode();
+        user.tokenVersion += 1;
+        user.activationCodeHash = await hashActivationCode(code, user.email, deps.signingSecret);
+        await deps.store.save(user);
+        return json({ data: { user: licenseView(user), activationCode: code } });
+      }
       if (request.method !== "POST") throw new ApiError(404, "NOT_FOUND", "Resource not found.");
+
+      if (pathname === "/v1/admin/users") {
+        const input = parseNewUser(await readJson(request));
+        if (await deps.store.findByEmail(input.email)) throw new ApiError(409, "USER_EXISTS", "A user with this email already exists.");
+        const code = activationCode();
+        const user: LicenseRecord = {
+          ...input, machineId: "", lastLogin: "", used: 0, tokenVersion: 1,
+          activationCodeHash: await hashActivationCode(code, input.email, deps.signingSecret),
+        };
+        await deps.store.create(user);
+        return json({ data: { user: licenseView(user), activationCode: code } }, 201);
+      }
+
+      const resetMachineMatch = pathname.match(/^\/v1\/admin\/users\/([^/]+)\/reset-machine$/);
+      if (resetMachineMatch) {
+        const email = decodeURIComponent(resetMachineMatch[1]).trim().toLowerCase();
+        const user = await deps.store.findByEmail(email);
+        if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+        const code = activationCode();
+        user.machineId = "";
+        user.tokenVersion += 1;
+        user.activationCodeHash = await hashActivationCode(code, email, deps.signingSecret);
+        await deps.store.save(user);
+        return json({ data: { user: licenseView(user), activationCode: code } });
+      }
 
       if (pathname === "/v1/activations") {
         const input = parseActivationRequest(await readJson(request));

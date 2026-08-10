@@ -61,3 +61,27 @@ test("Google HTTP errors do not expose response content", async () => {
   });
   await assert.rejects(() => store.findByEmail("user@example.com"), /^Error: Google Sheets request failed$/);
 });
+
+test("admin list, create, and delete use bounded Sheet operations", async () => {
+  const requests: Request[] = [];
+  const store = new GoogleSheetsStore({
+    spreadsheetId: "sheet-id-123",
+    getAccessToken: async () => "access-token",
+    fetcher: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      if (request.method === "GET") return Response.json({ values: [["Name", "Email"], row] });
+      if (request.url.endsWith(":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS")) return Response.json({ updates: { updatedRows: 1 } });
+      if (request.url.endsWith(":clear")) return Response.json({ clearedRange: "Sheet1!A2:J2" });
+      return new Response(null, { status: 500 });
+    },
+  });
+  assert.equal((await store.list(1, 50)).total, 1);
+  await store.create({
+    name: "New", email: "new@example.com", machineId: "", lastLogin: "", used: 0,
+    quota: 5, expiryDate: "Lifetime", expiryTime: "00:00", activationCodeHash: "hash", tokenVersion: 1,
+  });
+  await store.delete("user@example.com");
+  assert.ok(requests.some((request) => request.url.includes("Sheet1!A%3AJ:append")));
+  assert.ok(requests.some((request) => request.url.includes("Sheet1!A2%3AJ2:clear")));
+});

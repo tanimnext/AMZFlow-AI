@@ -15,4 +15,7 @@ export interface LicenseRecord {
 export interface LicenseStore {
   findByEmail(email: string): Promise<LicenseRecord | null>;
   save(user: LicenseRecord): Promise<void>;
+  list(page: number, pageSize: number): Promise<{ users: LicenseRecord[]; total: number }>;
+  create(user: LicenseRecord): Promise<void>;
+  delete(email: string): Promise<void>;
 }

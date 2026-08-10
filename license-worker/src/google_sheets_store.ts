@@ -60,19 +60,23 @@ export class GoogleSheetsStore implements LicenseStore {
     try { return await response.json(); } catch { throw new Error("Invalid Google Sheets response"); }
   }
 
-  async findByEmail(email: string): Promise<LicenseRecord | null> {
-    const range = encodeURIComponent("Sheet1!A:J");
-    const payload = await this.request(`/values/${range}`);
+  private async readLicenses(): Promise<LicenseRecord[]> {
+    const payload = await this.request(`/values/${encodeURIComponent("Sheet1!A:J")}`);
     if (typeof payload !== "object" || payload === null || !("values" in payload) || !Array.isArray(payload.values)) {
       throw new Error("Invalid Google Sheets response");
     }
-    const target = email.trim().toLowerCase();
+    const users: LicenseRecord[] = [];
     for (let index = 1; index < payload.values.length; index += 1) {
       const row = payload.values[index];
       if (!Array.isArray(row)) throw new Error("Invalid Google Sheets response");
-      if (cell(row, 1).toLowerCase() === target) return rowToLicense(row, index + 1);
+      if (cell(row, 1)) users.push(rowToLicense(row, index + 1));
     }
-    return null;
+    return users;
+  }
+
+  async findByEmail(email: string): Promise<LicenseRecord | null> {
+    const target = email.trim().toLowerCase();
+    return (await this.readLicenses()).find((user) => user.email === target) ?? null;
   }
 
   async save(user: LicenseRecord): Promise<void> {
@@ -86,6 +90,37 @@ export class GoogleSheetsStore implements LicenseStore {
       body: JSON.stringify({ valueInputOption: "RAW", data: [{ range: `Sheet1!A${user.rowNumber}:J${user.rowNumber}`, values }] }),
     });
     if (typeof payload !== "object" || payload === null || !("totalUpdatedRows" in payload) || payload.totalUpdatedRows !== 1) {
+      throw new Error("Invalid Google Sheets response");
+    }
+  }
+
+  async list(page: number, pageSize: number): Promise<{ users: LicenseRecord[]; total: number }> {
+    const all = await this.readLicenses();
+    return { users: all.slice((page - 1) * pageSize, page * pageSize), total: all.length };
+  }
+
+  async create(user: LicenseRecord): Promise<void> {
+    const values = [[
+      user.name, user.email, user.machineId, user.lastLogin, user.used, user.quota,
+      user.expiryDate, user.expiryTime, user.activationCodeHash, user.tokenVersion,
+    ]];
+    const range = encodeURIComponent("Sheet1!A:J");
+    const payload = await this.request(`/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
+      method: "POST", body: JSON.stringify({ values }),
+    });
+    if (typeof payload !== "object" || payload === null || !("updates" in payload) ||
+        typeof payload.updates !== "object" || payload.updates === null ||
+        !("updatedRows" in payload.updates) || payload.updates.updatedRows !== 1) {
+      throw new Error("Invalid Google Sheets response");
+    }
+  }
+
+  async delete(email: string): Promise<void> {
+    const user = await this.findByEmail(email);
+    if (!user?.rowNumber) return;
+    const range = encodeURIComponent(`Sheet1!A${user.rowNumber}:J${user.rowNumber}`);
+    const payload = await this.request(`/values/${range}:clear`, { method: "POST", body: "{}" });
+    if (typeof payload !== "object" || payload === null || !("clearedRange" in payload)) {
       throw new Error("Invalid Google Sheets response");
     }
   }

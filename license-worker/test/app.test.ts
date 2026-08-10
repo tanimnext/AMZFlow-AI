@@ -12,6 +12,9 @@ class FakeStore implements LicenseStore {
   constructor(user: LicenseRecord | null) { this.user = user; }
   async findByEmail(email: string) { return this.user?.email === email ? { ...this.user } : null; }
   async save(user: LicenseRecord) { this.user = { ...user }; }
+  async list() { return { users: this.user ? [{ ...this.user }] : [], total: this.user ? 1 : 0 }; }
+  async create(user: LicenseRecord) { this.user = { ...user }; }
+  async delete(email: string) { if (this.user?.email === email) this.user = null; }
 }
 
 async function fixture() {
@@ -86,4 +89,59 @@ test("usage updates are authenticated, bounded, and persisted", async () => {
   assert.equal((await app(post("/v1/usage", { machineId: "machine-id-123", used: 2 }, token))).status, 200);
   assert.equal(store.user?.used, 2);
   assert.equal((await app(post("/v1/usage", { machineId: "machine-id-123", used: 6 }, token))).status, 403);
+});
+
+test("admin endpoints reject missing or incorrect bearer tokens", async () => {
+  const app = createApp({ store: await fixture(), signingSecret: secret, adminToken: "test-admin-token-with-enough-entropy" });
+  assert.equal((await app(new Request("https://license.test/v1/admin/users"))).status, 401);
+  assert.equal((await app(new Request("https://license.test/v1/admin/users", { headers: { authorization: "Bearer wrong-token" } }))).status, 401);
+});
+
+test("admin can create a user and receives the activation code only once", async () => {
+  const store = new FakeStore(null);
+  const adminToken = "test-admin-token-with-enough-entropy";
+  const app = createApp({ store, signingSecret: secret, adminToken });
+  const response = await app(post("/v1/admin/users", {
+    name: "New Customer", email: "new@example.com", quota: 10,
+    expiryDate: "Lifetime", expiryTime: "00:00",
+  }, adminToken));
+  const body = await response.json() as { data: { activationCode: string } };
+  assert.equal(response.status, 201);
+  assert.match(body.data.activationCode, /^[a-z0-9]{4}(?:-[a-z0-9]{4}){3}$/);
+  assert.notEqual(store.user?.activationCodeHash, body.data.activationCode);
+  assert.equal(store.user?.tokenVersion, 1);
+});
+
+test("admin machine reset revokes tokens and creates a new activation code", async () => {
+  const store = await fixture();
+  store.user!.machineId = "machine-id-123";
+  store.user!.activationCodeHash = "";
+  const adminToken = "test-admin-token-with-enough-entropy";
+  const app = createApp({ store, signingSecret: secret, adminToken });
+  const response = await app(post("/v1/admin/users/user%40example.com/reset-machine", {}, adminToken));
+  assert.equal(response.status, 200);
+  assert.equal(store.user?.machineId, "");
+  assert.equal(store.user?.tokenVersion, 2);
+  assert.ok(store.user?.activationCodeHash);
+});
+
+test("admin can update, reset usage, regenerate code, and delete a user", async () => {
+  const store = await fixture();
+  const adminToken = "test-admin-token-with-enough-entropy";
+  const app = createApp({ store, signingSecret: secret, adminToken });
+  const patchResponse = await app(new Request("https://license.test/v1/admin/users/user%40example.com", {
+    method: "PATCH", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ quota: 20 }),
+  }));
+  assert.equal(patchResponse.status, 200);
+  assert.equal(store.user?.quota, 20);
+  assert.equal((await app(post("/v1/admin/users/user%40example.com/reset-usage", {}, adminToken))).status, 200);
+  assert.equal(store.user?.used, 0);
+  assert.equal((await app(post("/v1/admin/users/user%40example.com/activation-code", {}, adminToken))).status, 200);
+  assert.equal(store.user?.tokenVersion, 2);
+  const deleted = await app(new Request("https://license.test/v1/admin/users/user%40example.com", {
+    method: "DELETE", headers: { authorization: `Bearer ${adminToken}` },
+  }));
+  assert.equal(deleted.status, 204);
+  assert.equal(store.user, null);
 });
