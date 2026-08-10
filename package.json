@@ -1,6 +1,6 @@
 {
   "name": "amzflow-ai-ui",
-  "version": "7.1.0",
+  "version": "7.1.1",
   "private": true,
   "description": "Local UI build for AmzFlow AI (Tailwind utility layer only; components live in web_app/static/theme.css).",
   "scripts": {

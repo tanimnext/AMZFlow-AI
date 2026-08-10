@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [7.1.1] - 2026-08-10 -- Server-side license service
+
+### Fixed
+
+- Clean Windows installs no longer fail with `Database Connection Error` on
+  first login; activation now uses the public HTTPS license API.
+- Admin machine resets now display the replacement one-time activation code.
+- Usage counters cannot be reduced through the API.
+
+### Security
+
+- Google service-account credentials moved exclusively to Cloudflare Worker
+  secrets and were removed from desktop and legacy application-data folders.
+- Added one-time activation codes, machine-bound revocable signed tokens,
+  generic public errors, strict input validation, admin bearer authorization,
+  security headers, request limits, and Cloudflare rate limiting.
+
+### Added
+
+- Cloudflare Worker tests, type checks, dependency audit, deployment dry-run,
+  structured safe error diagnostics, and a license operations runbook.
+- Release builds now require and embed only the public license API URL.
+
 ## [7.1.0] - 2026-08-09 -- Portable desktop distribution
 
 ### Added
