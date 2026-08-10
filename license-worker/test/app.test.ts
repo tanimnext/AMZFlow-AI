@@ -102,6 +102,8 @@ test("usage updates are authenticated, bounded, and persisted", async () => {
   const token = ((await activation.json()) as { data: { activationToken: string } }).data.activationToken;
   assert.equal((await app(post("/v1/usage", { machineId: "machine-id-123", used: 2 }, token))).status, 200);
   assert.equal(store.user?.used, 2);
+  assert.equal((await app(post("/v1/usage", { machineId: "machine-id-123", used: 1 }, token))).status, 409);
+  assert.equal(store.user?.used, 2);
   assert.equal((await app(post("/v1/usage", { machineId: "machine-id-123", used: 6 }, token))).status, 403);
 });
 

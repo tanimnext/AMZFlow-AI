@@ -126,6 +126,23 @@ class ActivationRouteTests(unittest.TestCase):
             "user@example.com", "Customer", unittest.mock.ANY, "abcd-efgh-2345-6789"
         )
 
+    def test_activation_route_never_exposes_internal_exception_details(self):
+        client = self.module.app.test_client()
+        with client.session_transaction() as session:
+            session["csrf_token"] = "csrf-test"
+        with patch.object(
+            self.module.license_store,
+            "activate_license",
+            side_effect=RuntimeError("private server detail"),
+        ):
+            response = client.post(
+                "/activate",
+                json={"email": "user@example.com", "name": "Customer", "activationCode": "abcd-efgh-2345-6789"},
+                headers={"X-CSRF-Token": "csrf-test"},
+            )
+        self.assertFalse(response.get_json()["success"])
+        self.assertNotIn("private server detail", response.get_data(as_text=True))
+
 
 if __name__ == "__main__":
     unittest.main()

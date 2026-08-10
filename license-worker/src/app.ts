@@ -270,6 +270,9 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
       if (pathname === "/v1/usage") {
         const input = parseUsageRequest(await readJson(request));
         const user = await authorizedUser(request, input.machineId, deps);
+        if (input.used < user.used) {
+          throw new ApiError(409, "USAGE_CONFLICT", "Usage cannot be lower than the current value.");
+        }
         if (user.quota !== "Unlimited" && input.used > user.quota) {
           throw new ApiError(403, "QUOTA_EXCEEDED", "License quota has been reached.");
         }

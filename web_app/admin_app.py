@@ -154,7 +154,7 @@ def delete_user(email):
 @app.route('/users/<email>/reset-machine', methods=['POST'])
 def reset_machine(email):
     success, msg = license_store.reset_machine(email)
-    flash("Machine binding reset" if success else msg, "success" if success else "error")
+    flash(msg, "success" if success else "error")
     return redirect(url_for('dashboard'))
 
 

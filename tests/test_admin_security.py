@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,22 @@ class AdminSecurityTests(unittest.TestCase):
         response = self.client.get("/login")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'name="csrf_token"', response.data)
+
+    def test_machine_reset_displays_new_activation_code(self):
+        with self.client.session_transaction() as session:
+            session["is_admin"] = True
+            session["csrf_token"] = "csrf-test"
+        with patch.object(
+            admin_app.license_store,
+            "reset_machine",
+            return_value=(True, "Machine binding reset. Activation code: abcd-efgh-2345-6789"),
+        ), patch.object(admin_app.license_store, "list_users", return_value=[]):
+            response = self.client.post(
+                "/users/user@example.com/reset-machine",
+                data={"csrf_token": "csrf-test"},
+                follow_redirects=True,
+            )
+        self.assertIn(b"abcd-efgh-2345-6789", response.data)
 
 
 if __name__ == "__main__":

@@ -217,8 +217,8 @@ LOGIN_TOKEN_FILE = str(PRIVATE_LOGIN_TOKEN_FILE)
 import hashlib
 
 # --- ACTIVATION CONFIG ---
-# Backed by a local JSON store (web_app/users.json) managed via the admin
-# dashboard (admin_app.py) instead of Google Sheets.
+# Backed by the server-side license API. The local file stores only the signed
+# activation token and machine binding, never Google credentials.
 
 def verify_activation(email, user_name_input=None, activation_code=None):
     current_machine = get_machine_id()
@@ -641,8 +641,9 @@ def activate():
                 return jsonify({"success": True})
             else:
                 return jsonify({"success": False, "error": str(res)})
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)})
+        except Exception:
+            app.logger.error("Activation failed internally")
+            return jsonify({"success": False, "error": "Activation service is temporarily unavailable"})
 
     # GET
     if session.get('is_activated'):
