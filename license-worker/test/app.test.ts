@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createApp } from "../src/app.ts";
-import { hashActivationCode } from "../src/security.ts";
 import type { LicenseRecord, LicenseStore } from "../src/store.ts";
 
 const secret = "test-only-signing-secret-with-enough-entropy";
@@ -17,12 +16,11 @@ class FakeStore implements LicenseStore {
   async delete(email: string) { if (this.user?.email === email) this.user = null; }
 }
 
-async function fixture() {
+function fixture() {
   return new FakeStore({
     name: "Customer Name", email: "user@example.com", machineId: "", lastLogin: "",
     used: 1, quota: 5, expiryDate: "Lifetime", expiryTime: "00:00",
-    activationCodeHash: await hashActivationCode("abcd-efgh", "user@example.com", secret),
-    tokenVersion: 1,
+    activationCodeHash: "", tokenVersion: 1,
   });
 }
 
@@ -41,29 +39,32 @@ test("health response is minimal and hardened", async () => {
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
 });
 
-test("activation binds the machine, consumes code, and returns a token", async () => {
-  const store = await fixture();
+test("activation binds the machine by email alone and returns a token", async () => {
+  const store = fixture();
   const app = createApp({ store, signingSecret: secret });
   const response = await app(post("/v1/activations", {
-    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123", activationCode: "abcd-efgh",
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123",
   }));
   const body = await response.json() as { data: { activationToken: string } };
   assert.equal(response.status, 200);
   assert.match(body.data.activationToken, /^v1\./);
   assert.equal(store.user?.machineId, "machine-id-123");
-  assert.equal(store.user?.activationCodeHash, "");
 });
 
-test("invalid activation attempts have one generic response", async () => {
-  const app = createApp({ store: await fixture(), signingSecret: secret });
+test("activation is rejected for an unknown email or an already-bound machine", async () => {
+  const store = fixture();
+  const app = createApp({ store, signingSecret: secret });
   const unknown = await app(post("/v1/activations", {
-    email: "nobody@example.com", name: "Nobody", machineId: "machine-id-123", activationCode: "wrong-code",
-  }));
-  const wrongCode = await app(post("/v1/activations", {
-    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123", activationCode: "wrong-code",
+    email: "nobody@example.com", name: "Nobody", machineId: "machine-id-123",
   }));
   assert.equal(unknown.status, 401);
-  assert.deepEqual(await unknown.json(), await wrongCode.json());
+
+  await app(post("/v1/activations", { email: "user@example.com", name: "Customer Name", machineId: "machine-id-123" }));
+  const otherMachine = await app(post("/v1/activations", {
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-456",
+  }));
+  assert.equal(otherMachine.status, 401);
+  assert.deepEqual(await unknown.json(), await otherMachine.json());
 });
 
 test("internal failures emit safe structured diagnostics", async () => {
@@ -72,19 +73,19 @@ test("internal failures emit safe structured diagnostics", async () => {
   store.findByEmail = async () => { throw new Error("Google authentication failed"); };
   const app = createApp({ store, signingSecret: secret, logger: (event) => events.push(event) });
   const response = await app(post("/v1/activations", {
-    email: "private@example.com", name: "Private Name", machineId: "machine-id-123", activationCode: "private-code",
+    email: "private@example.com", name: "Private Name", machineId: "machine-id-123",
   }));
   assert.equal(response.status, 500);
   const serialized = JSON.stringify(events);
   assert.match(serialized, /license_api_error|Google authentication failed/);
-  assert.doesNotMatch(serialized, /private@example|Private Name|private-code/);
+  assert.doesNotMatch(serialized, /private@example|Private Name/);
 });
 
 test("verification requires a valid token and current machine", async () => {
-  const store = await fixture();
+  const store = fixture();
   const app = createApp({ store, signingSecret: secret });
   const activation = await app(post("/v1/activations", {
-    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123", activationCode: "abcd-efgh",
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123",
   }));
   const token = ((await activation.json()) as { data: { activationToken: string } }).data.activationToken;
   const verified = await app(post("/v1/licenses/verify", { machineId: "machine-id-123" }, token));
@@ -94,10 +95,10 @@ test("verification requires a valid token and current machine", async () => {
 });
 
 test("usage updates are authenticated, bounded, and persisted", async () => {
-  const store = await fixture();
+  const store = fixture();
   const app = createApp({ store, signingSecret: secret });
   const activation = await app(post("/v1/activations", {
-    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123", activationCode: "abcd-efgh",
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123",
   }));
   const token = ((await activation.json()) as { data: { activationToken: string } }).data.activationToken;
   assert.equal((await app(post("/v1/usage", { machineId: "machine-id-123", used: 2 }, token))).status, 200);
@@ -108,13 +109,13 @@ test("usage updates are authenticated, bounded, and persisted", async () => {
 });
 
 test("admin endpoints reject missing or incorrect bearer tokens", async () => {
-  const app = createApp({ store: await fixture(), signingSecret: secret, adminToken: "test-admin-token-with-enough-entropy" });
+  const app = createApp({ store: fixture(), signingSecret: secret, adminToken: "test-admin-token-with-enough-entropy" });
   assert.equal((await app(new Request("https://license.test/v1/admin/users"))).status, 401);
   assert.equal((await app(new Request("https://license.test/v1/admin/users", { headers: { authorization: "Bearer wrong-token" } }))).status, 401);
 });
 
 test("admin list includes machine metadata but never activation hashes", async () => {
-  const store = await fixture();
+  const store = fixture();
   store.user!.machineId = "machine-id-123";
   const adminToken = "test-admin-token-with-enough-entropy";
   const app = createApp({ store, signingSecret: secret, adminToken });
@@ -126,7 +127,7 @@ test("admin list includes machine metadata but never activation hashes", async (
   assert.doesNotMatch(text, /activationCodeHash|test-only-signing/);
 });
 
-test("admin can create a user and receives the activation code only once", async () => {
+test("admin can create a user who can activate immediately by email", async () => {
   const store = new FakeStore(null);
   const adminToken = "test-admin-token-with-enough-entropy";
   const app = createApp({ store, signingSecret: secret, adminToken });
@@ -134,28 +135,30 @@ test("admin can create a user and receives the activation code only once", async
     name: "New Customer", email: "new@example.com", quota: 10,
     expiryDate: "Lifetime", expiryTime: "00:00",
   }, adminToken));
-  const body = await response.json() as { data: { activationCode: string } };
   assert.equal(response.status, 201);
-  assert.match(body.data.activationCode, /^[a-z0-9]{4}(?:-[a-z0-9]{4}){3}$/);
-  assert.notEqual(store.user?.activationCodeHash, body.data.activationCode);
   assert.equal(store.user?.tokenVersion, 1);
+  assert.equal(store.user?.machineId, "");
+
+  const activation = await app(post("/v1/activations", {
+    email: "new@example.com", name: "New Customer", machineId: "machine-id-999",
+  }));
+  assert.equal(activation.status, 200);
+  assert.equal(store.user?.machineId, "machine-id-999");
 });
 
-test("admin machine reset revokes tokens and creates a new activation code", async () => {
-  const store = await fixture();
+test("admin machine reset revokes tokens and frees the email for re-activation", async () => {
+  const store = fixture();
   store.user!.machineId = "machine-id-123";
-  store.user!.activationCodeHash = "";
   const adminToken = "test-admin-token-with-enough-entropy";
   const app = createApp({ store, signingSecret: secret, adminToken });
   const response = await app(post("/v1/admin/users/user%40example.com/reset-machine", {}, adminToken));
   assert.equal(response.status, 200);
   assert.equal(store.user?.machineId, "");
   assert.equal(store.user?.tokenVersion, 2);
-  assert.ok(store.user?.activationCodeHash);
 });
 
-test("admin can update, reset usage, regenerate code, and delete a user", async () => {
-  const store = await fixture();
+test("admin can update, reset usage, and delete a user", async () => {
+  const store = fixture();
   const adminToken = "test-admin-token-with-enough-entropy";
   const app = createApp({ store, signingSecret: secret, adminToken });
   const patchResponse = await app(new Request("https://license.test/v1/admin/users/user%40example.com", {
@@ -166,8 +169,6 @@ test("admin can update, reset usage, regenerate code, and delete a user", async 
   assert.equal(store.user?.quota, 20);
   assert.equal((await app(post("/v1/admin/users/user%40example.com/reset-usage", {}, adminToken))).status, 200);
   assert.equal(store.user?.used, 0);
-  assert.equal((await app(post("/v1/admin/users/user%40example.com/activation-code", {}, adminToken))).status, 200);
-  assert.equal(store.user?.tokenVersion, 2);
   const deleted = await app(new Request("https://license.test/v1/admin/users/user%40example.com", {
     method: "DELETE", headers: { authorization: `Bearer ${adminToken}` },
   }));

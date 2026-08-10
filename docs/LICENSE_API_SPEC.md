@@ -7,19 +7,22 @@ Cloudflare Worker API. Google service-account credentials must exist only as a
 server-side secret and must never be committed, logged, returned by an API, or
 embedded in Windows/macOS distributions.
 
-The existing Google Sheet remains the license database. A customer activates
-with a registered email, a one-time activation code, and the local machine ID.
-The API binds the license to that machine and returns a revocable signed token
-for later verification and quota updates.
+The existing Google Sheet remains the license database. The admin registers a
+customer by name and email only (`admin_dashboard.command`, owner-only,
+localhost). The customer then activates with that same registered email, name,
+and the local machine ID — no activation code changes hands. The API binds the
+license to the first machine that activates and returns a revocable signed
+token for later verification and quota updates. Resetting a machine (admin
+dashboard) frees the email for one more activation on a new device.
 
 ## Approved Decisions
 
 1. Cloudflare Workers is the hosting platform.
 2. Existing Google Sheet `Sheet1` remains the source of truth.
-3. A one-time activation code is required; email alone is not authentication.
-4. Existing users receive a newly generated activation code and re-activate
-   once after upgrading.
-5. The local admin dashboard continues to be owner-only, but calls protected
+3. Email + name registered by the admin is sufficient to activate; no
+   activation code is issued or required (decision reversed 2026-08-10 — see
+   Deployment Status).
+4. The local admin dashboard continues to be owner-only, but calls protected
    API endpoints instead of reading Google credentials.
 
 ## API Contract
@@ -39,7 +42,6 @@ PATCH  /v1/admin/users/:email
 DELETE /v1/admin/users/:email
 POST   /v1/admin/users/:email/reset-machine
 POST   /v1/admin/users/:email/reset-usage
-POST   /v1/admin/users/:email/activation-code
 ```
 
 Activation request:
@@ -48,8 +50,7 @@ Activation request:
 {
   "email": "customer@example.com",
   "name": "Customer Name",
-  "machineId": "validated-machine-id",
-  "activationCode": "one-time-code"
+  "machineId": "validated-machine-id"
 }
 ```
 
@@ -101,7 +102,8 @@ Add:
 I ActivationCodeHash | J TokenVersion
 ```
 
-Only a salted hash of the one-time activation code is stored. `TokenVersion`
+Column I is unused since the 2026-08-10 email-only activation change (kept
+empty; the schema is unchanged to avoid a Sheet migration). `TokenVersion`
 allows reset/revocation without keeping issued tokens in the Sheet.
 
 ## Server Secrets
@@ -190,19 +192,25 @@ direct client access to Google credentials.
 
 1. A clean Windows installation activates without `config.json`.
 2. No distributed or tracked file contains Google credentials.
-3. Valid code/email/machine activates; invalid combinations return the same
-   generic error; another machine is rejected.
+3. A registered email/name activates on the first machine that requests it;
+   unknown emails and already-bound machines return the same generic error.
 4. Token verification reflects expiry/quota changes and supports revocation.
-5. Admin CRUD/reset/code-generation actions require the admin token.
+5. Admin CRUD/reset actions require the admin token.
 6. Worker and Python tests, CI, Windows build, checksum, and staging activation
-   all pass before `v7.1.1` is published.
+   all pass before a release is published.
 
-The one-time activation-code requirement and one-time re-activation of existing
-users were approved on 2026-08-09.
+The one-time activation-code requirement was approved on 2026-08-09, then
+reversed on 2026-08-10: the owner found generating and relaying a code for
+every customer too much overhead for a small-scale license base, and asked
+for the original "just add the email" simplicity back. Email + name
+registered by the admin, plus per-license machine binding (one active device,
+free-able via **Reset Machine**), was kept as the minimum viable protection
+against a leaked email being reused on someone else's machine.
 
 ## Deployment Status
 
 Production was deployed on 2026-08-10 at
 `https://amzflow-license-api.tanimnext2.workers.dev`. Google Sheet columns I-J
 were migrated, the existing license was reactivated through the API, and local
-Google service-account files were removed after end-to-end verification.
+Google service-account files were removed after end-to-end verification. The
+activation-code requirement was removed the same day (see Approved Decisions).

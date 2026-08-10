@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Activation no longer requires a one-time code. The admin adds a customer by
+  name + email in `admin_dashboard.command`; the customer activates in the app
+  with that same name + email. The license still binds to the first machine
+  that activates — use **Reset Machine** to free it for a new device.
+
 ## [7.1.1] - 2026-08-10 -- Server-side license service
 
 ### Fixed

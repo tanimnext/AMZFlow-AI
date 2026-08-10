@@ -28,21 +28,21 @@ class AdminSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'name="csrf_token"', response.data)
 
-    def test_machine_reset_displays_new_activation_code(self):
+    def test_machine_reset_confirms_the_email_can_activate_again(self):
         with self.client.session_transaction() as session:
             session["is_admin"] = True
             session["csrf_token"] = "csrf-test"
         with patch.object(
             admin_app.license_store,
             "reset_machine",
-            return_value=(True, "Machine binding reset. Activation code: abcd-efgh-2345-6789"),
+            return_value=(True, "Machine binding reset. They can activate again with just their email."),
         ), patch.object(admin_app.license_store, "list_users", return_value=[]):
             response = self.client.post(
                 "/users/user@example.com/reset-machine",
                 data={"csrf_token": "csrf-test"},
                 follow_redirects=True,
             )
-        self.assertIn(b"abcd-efgh-2345-6789", response.data)
+        self.assertIn(b"activate again", response.data)
 
 
 if __name__ == "__main__":

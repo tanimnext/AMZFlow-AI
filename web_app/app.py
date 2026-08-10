@@ -220,14 +220,11 @@ import hashlib
 # Backed by the server-side license API. The local file stores only the signed
 # activation token and machine binding, never Google credentials.
 
-def verify_activation(email, user_name_input=None, activation_code=None):
+def verify_activation(email, user_name_input=None):
     current_machine = get_machine_id()
-    if activation_code:
-        success, res = license_store.activate_license(
-            email, user_name_input or "", current_machine, activation_code
-        )
-    else:
-        success, res = license_store.verify_activation_local(email, current_machine)
+    success, res = license_store.verify_activation_local(email, current_machine)
+    if not success and user_name_input is not None:
+        success, res = license_store.activate_license(email, user_name_input, current_machine)
     if success:
         email_clean = email.strip().lower()
         session['is_activated'] = True
@@ -632,11 +629,10 @@ def activate():
             data = request.get_json()
             email = data.get('email')
             user_name = data.get('name')
-            activation_code = data.get('activationCode')
-            if not email or not user_name or not activation_code:
-                return jsonify({"success": False, "error": "Name, email, and activation code are required"})
-            
-            success, res = verify_activation(email, user_name, activation_code)
+            if not email or not user_name:
+                return jsonify({"success": False, "error": "Name and email are required"})
+
+            success, res = verify_activation(email, user_name)
             if success:
                 return jsonify({"success": True})
             else:

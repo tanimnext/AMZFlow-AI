@@ -108,10 +108,10 @@ def _request(method, path, *, body=None, bearer=""):
     return False, message
 
 
-def activate_license(email, name, machine_id, activation_code):
+def activate_license(email, name, machine_id):
     success, payload = _request("POST", "/v1/activations", body={
         "email": str(email).strip().lower(), "name": str(name).strip(),
-        "machineId": str(machine_id), "activationCode": str(activation_code).strip().lower(),
+        "machineId": str(machine_id),
     })
     if not success:
         return False, payload
@@ -209,10 +209,7 @@ def add_user(name, email, expiry_date="Lifetime", expiry_time="00:00", quota="Un
     })
     if not success:
         return False, payload
-    try:
-        return True, f"User added. Activation code: {payload['data']['activationCode']}"
-    except (KeyError, TypeError):
-        return False, "License service returned an invalid response."
+    return True, "User added. They can activate in the app with just their email."
 
 
 def update_user(email, **fields):
@@ -229,19 +226,12 @@ def delete_user(email):
 
 def _admin_action(email, action, success_message):
     success, payload = _admin_request("POST", f"/v1/admin/users/{quote(str(email).strip().lower(), safe='')}/{action}", {})
-    if not success:
-        return False, payload
-    code = payload.get("data", {}).get("activationCode") if isinstance(payload, dict) else None
-    return True, f"{success_message}. Activation code: {code}" if code else success_message
+    return (True, success_message) if success else (False, payload)
 
 
 def reset_machine(email):
-    return _admin_action(email, "reset-machine", "Machine binding reset")
+    return _admin_action(email, "reset-machine", "Machine binding reset. They can activate again with just their email.")
 
 
 def reset_usage(email):
     return _admin_action(email, "reset-usage", "Usage counter reset")
-
-
-def generate_activation_code(email):
-    return _admin_action(email, "activation-code", "Activation code generated")

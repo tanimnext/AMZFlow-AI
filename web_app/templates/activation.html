@@ -25,9 +25,6 @@
                 <input type="text" id="name" required placeholder="Your Full Name" autocomplete="name"></label>
             <label class="field"><span class="label">Registered Email</span>
                 <input type="email" id="email" required placeholder="you@example.com" autocomplete="email"></label>
-            <label class="field"><span class="label">Activation Code</span>
-                <input type="text" id="activationCode" required placeholder="xxxx-xxxx-xxxx-xxxx"
-                       autocomplete="one-time-code" autocapitalize="none" spellcheck="false"></label>
             <button type="submit" id="submitBtn" class="btn btn-primary btn-lg w-full">
                 <span>Activate Software</span>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
@@ -50,14 +47,13 @@
         e.preventDefault();
         const email = document.getElementById('email').value;
         const name = document.getElementById('name').value;
-        const activationCode = document.getElementById('activationCode').value;
         const btn = document.getElementById('submitBtn');
         const error = document.getElementById('errorMsg');
 
         error.classList.add('hidden');
         await AF.withBusy(btn, 'Checking…', async () => {
             try {
-                const data = await AF.api('/activate', { body: { email, name, activationCode } });
+                const data = await AF.api('/activate', { body: { email, name } });
                 if (data.success) {
                     window.location.href = '/';
                     return;

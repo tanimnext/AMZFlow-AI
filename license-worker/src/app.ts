@@ -1,8 +1,6 @@
 import {
-  hashActivationCode,
   issueActivationToken,
   readUnverifiedTokenEmail,
-  verifyActivationCode,
   verifyActivationToken,
 } from "./security.ts";
 import type { LicenseRecord, LicenseStore } from "./store.ts";
@@ -101,13 +99,6 @@ async function requireAdmin(request: Request, expected = ""): Promise<void> {
   } catch { throw new ApiError(401, "UNAUTHORIZED", "Admin authorization is required."); }
 }
 
-function activationCode(): string {
-  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  const value = Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
-  return value.match(/.{4}/g)!.join("-");
-}
-
 function parseNewUser(value: unknown) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
   const input = value as Record<string, unknown>;
@@ -204,28 +195,16 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
         await deps.store.save(user);
         return json({ data: { user: adminView(user) } });
       }
-      const activationCodeEmail = adminEmail(pathname, "/activation-code");
-      if (request.method === "POST" && activationCodeEmail) {
-        const user = await deps.store.findByEmail(activationCodeEmail);
-        if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
-        const code = activationCode();
-        user.tokenVersion += 1;
-        user.activationCodeHash = await hashActivationCode(code, user.email, deps.signingSecret);
-        await deps.store.save(user);
-        return json({ data: { user: adminView(user), activationCode: code } });
-      }
       if (request.method !== "POST") throw new ApiError(404, "NOT_FOUND", "Resource not found.");
 
       if (pathname === "/v1/admin/users") {
         const input = parseNewUser(await readJson(request));
         if (await deps.store.findByEmail(input.email)) throw new ApiError(409, "USER_EXISTS", "A user with this email already exists.");
-        const code = activationCode();
         const user: LicenseRecord = {
-          ...input, machineId: "", lastLogin: "", used: 0, tokenVersion: 1,
-          activationCodeHash: await hashActivationCode(code, input.email, deps.signingSecret),
+          ...input, machineId: "", lastLogin: "", used: 0, tokenVersion: 1, activationCodeHash: "",
         };
         await deps.store.create(user);
-        return json({ data: { user: adminView(user), activationCode: code } }, 201);
+        return json({ data: { user: adminView(user) } }, 201);
       }
 
       const resetMachineMatch = pathname.match(/^\/v1\/admin\/users\/([^/]+)\/reset-machine$/);
@@ -233,25 +212,20 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
         const email = decodeURIComponent(resetMachineMatch[1]).trim().toLowerCase();
         const user = await deps.store.findByEmail(email);
         if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
-        const code = activationCode();
         user.machineId = "";
         user.tokenVersion += 1;
-        user.activationCodeHash = await hashActivationCode(code, email, deps.signingSecret);
         await deps.store.save(user);
-        return json({ data: { user: adminView(user), activationCode: code } });
+        return json({ data: { user: adminView(user) } });
       }
 
       if (pathname === "/v1/activations") {
         const input = parseActivationRequest(await readJson(request));
         const user = await deps.store.findByEmail(input.email);
-        const validCode = user && await verifyActivationCode(input.activationCode, input.email, user.activationCodeHash, deps.signingSecret);
-        const validName = user && (!user.name || user.name.toLowerCase() === input.name.toLowerCase());
-        if (!user || !validCode || !validName || !isActive(user, (deps.now ?? (() => new Date()))()) ||
+        if (!user || !isActive(user, (deps.now ?? (() => new Date()))()) ||
             (user.machineId && user.machineId.toLowerCase() !== input.machineId.toLowerCase())) throw INVALID_ACTIVATION;
         user.name ||= input.name;
         user.machineId = input.machineId;
         user.lastLogin = (deps.now ?? (() => new Date()))().toISOString();
-        user.activationCodeHash = "";
         await deps.store.save(user);
         const activationToken = await issueActivationToken(
           { email: user.email, machineId: user.machineId, tokenVersion: user.tokenVersion },

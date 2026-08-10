@@ -42,7 +42,7 @@ class LicenseApiClientTests(unittest.TestCase):
         }})
 
         success, result = license_store.activate_license(
-            "user@example.com", "Customer", "machine-id-123", "abcd-efgh-2345-6789"
+            "user@example.com", "Customer", "machine-id-123"
         )
 
         self.assertTrue(success)
@@ -75,7 +75,7 @@ class LicenseApiClientTests(unittest.TestCase):
         with patch.dict(os.environ, {"AMZFLOW_LICENSE_API_URL": ""}, clear=False), \
              patch("web_app.license_store.resource_dir", return_value=Path(self.temp_dir.name)):
             success, message = license_store.activate_license(
-                "user@example.com", "Customer", "machine-id-123", "abcd-efgh-2345-6789"
+                "user@example.com", "Customer", "machine-id-123"
             )
         self.assertFalse(success)
         self.assertNotIn("Database Connection Error", message)
@@ -87,7 +87,7 @@ class LicenseApiClientTests(unittest.TestCase):
             "code": "INTERNAL_ERROR", "message": "The service is temporarily unavailable."
         }})
         success, message = license_store.activate_license(
-            "user@example.com", "Customer", "machine-id-123", "wrong-code"
+            "user@example.com", "Customer", "machine-id-123"
         )
         self.assertFalse(success)
         self.assertEqual(message, "The service is temporarily unavailable.")
@@ -100,13 +100,14 @@ class ActivationRouteTests(unittest.TestCase):
         cls.module = app_module
         app_module.app.config.update(TESTING=True)
 
-    def test_activation_page_requires_one_time_code(self):
+    def test_activation_page_only_needs_name_and_email(self):
         client = self.module.app.test_client()
         response = client.get("/activate")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'id="activationCode"', response.data)
+        self.assertNotIn(b'id="activationCode"', response.data)
+        self.assertIn(b'id="email"', response.data)
 
-    def test_activation_route_passes_code_to_server_api_client(self):
+    def test_activation_route_activates_by_email_alone(self):
         client = self.module.app.test_client()
         with client.session_transaction() as session:
             session["csrf_token"] = "csrf-test"
@@ -114,30 +115,30 @@ class ActivationRouteTests(unittest.TestCase):
             "email": "user@example.com", "name": "Customer", "used": 0,
             "quota": 10, "expiry_date": "Lifetime", "expiry_time": "00:00",
         }
-        with patch.object(self.module.license_store, "activate_license", return_value=(True, license)) as activate:
+        with patch.object(self.module.license_store, "verify_activation_local", return_value=(False, "Activation is required for this computer.")), \
+             patch.object(self.module.license_store, "activate_license", return_value=(True, license)) as activate:
             response = client.post(
                 "/activate",
-                json={"email": "user@example.com", "name": "Customer", "activationCode": "abcd-efgh-2345-6789"},
+                json={"email": "user@example.com", "name": "Customer"},
                 headers={"X-CSRF-Token": "csrf-test"},
             )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()["success"])
-        activate.assert_called_once_with(
-            "user@example.com", "Customer", unittest.mock.ANY, "abcd-efgh-2345-6789"
-        )
+        activate.assert_called_once_with("user@example.com", "Customer", unittest.mock.ANY)
 
     def test_activation_route_never_exposes_internal_exception_details(self):
         client = self.module.app.test_client()
         with client.session_transaction() as session:
             session["csrf_token"] = "csrf-test"
-        with patch.object(
-            self.module.license_store,
-            "activate_license",
-            side_effect=RuntimeError("private server detail"),
-        ):
+        with patch.object(self.module.license_store, "verify_activation_local", return_value=(False, "Activation is required for this computer.")), \
+             patch.object(
+                self.module.license_store,
+                "activate_license",
+                side_effect=RuntimeError("private server detail"),
+            ):
             response = client.post(
                 "/activate",
-                json={"email": "user@example.com", "name": "Customer", "activationCode": "abcd-efgh-2345-6789"},
+                json={"email": "user@example.com", "name": "Customer"},
                 headers={"X-CSRF-Token": "csrf-test"},
             )
         self.assertFalse(response.get_json()["success"])

@@ -2,7 +2,6 @@ export interface ActivationRequest {
   email: string;
   name: string;
   machineId: string;
-  activationCode: string;
 }
 
 export interface MachineRequest { machineId: string; }
@@ -10,8 +9,7 @@ export interface UsageRequest extends MachineRequest { used: number; }
 
 const EMAIL_PATTERN = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}$/;
 const MACHINE_PATTERN = /^[A-Za-z0-9._:-]{8,200}$/;
-const CODE_PATTERN = /^[a-z0-9-]{8,80}$/;
-const ACTIVATION_FIELDS = new Set(["email", "name", "machineId", "activationCode"]);
+const ACTIVATION_FIELDS = new Set(["email", "name", "machineId"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -31,11 +29,10 @@ export function parseActivationRequest(value: unknown): ActivationRequest {
   const email = boundedString(value.email, 254).toLowerCase();
   const name = boundedString(value.name, 120);
   const machineId = boundedString(value.machineId, 200);
-  const activationCode = boundedString(value.activationCode, 80).toLowerCase();
-  if (!EMAIL_PATTERN.test(email) || !MACHINE_PATTERN.test(machineId) || !CODE_PATTERN.test(activationCode)) {
+  if (!EMAIL_PATTERN.test(email) || !MACHINE_PATTERN.test(machineId)) {
     throw new Error("Invalid request");
   }
-  return { email, name, machineId, activationCode };
+  return { email, name, machineId };
 }
 
 export function parseMachineRequest(value: unknown): MachineRequest {

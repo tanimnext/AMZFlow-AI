@@ -9,13 +9,11 @@ test("activation input is normalized and strictly bounded", () => {
       email: " User@Example.COM ",
       name: "  Customer Name ",
       machineId: "machine-id-123",
-      activationCode: " ABCD-EFGH ",
     }),
     {
       email: "user@example.com",
       name: "Customer Name",
       machineId: "machine-id-123",
-      activationCode: "abcd-efgh",
     },
   );
 });
@@ -27,7 +25,6 @@ test("activation input rejects missing, extra, and oversized values", () => {
       email: "user@example.com",
       name: "Customer",
       machineId: "machine-id-123",
-      activationCode: "abcd-efgh",
       unexpected: "field",
     }),
   );
@@ -36,7 +33,6 @@ test("activation input rejects missing, extra, and oversized values", () => {
       email: "user@example.com",
       name: "x".repeat(121),
       machineId: "machine-id-123",
-      activationCode: "abcd-efgh",
     }),
   );
 });

@@ -41,13 +41,21 @@ The owner-only admin dashboard reads its bearer token from
 `AMZFLOW_LICENSE_ADMIN_TOKEN` or the private application-data file
 `license_admin_token.txt`. That file is never bundled.
 
+## Add a Customer
+
+Run `admin_dashboard.command`, sign in, fill Name + Email (Quota/Expiry
+optional) under **Add New User**, submit. No activation code is generated —
+the customer activates in the app with that same name + email; the license
+binds to the first machine that activates.
+
 ## Rotate and Revoke
 
 1. Upload a new Worker secret with `wrangler secret put`.
 2. Deploy and verify `/v1/health` plus an authenticated admin list request.
 3. Revoke the old credential at its provider.
-4. For a customer token, use **Reset Machine** or generate a new activation
-   code; both increment `TokenVersion` and revoke previously issued tokens.
+4. For a customer token, use **Reset Machine** in the admin dashboard; it
+   clears the bound machine, increments `TokenVersion` (revoking previously
+   issued tokens), and lets the customer re-activate with just their email.
 
 ## Rollback
 

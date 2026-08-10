@@ -14,6 +14,10 @@ if [ ! -x "$PYBIN" ]; then
     exit 1
 fi
 
+# Point the local dashboard at the production license API (release builds get
+# this from release_config.json instead; this script runs from source).
+export AMZFLOW_LICENSE_API_URL="${AMZFLOW_LICENSE_API_URL:-https://amzflow-license-api.tanimnext2.workers.dev}"
+
 # Start the admin dashboard in the background, then open it in the browser
 "$PYBIN" web_app/admin_app.py &
 APP_PID=$!
