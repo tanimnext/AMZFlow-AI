@@ -7,6 +7,21 @@ from pathlib import Path
 
 
 class DesktopDistributionTests(unittest.TestCase):
+    def test_release_config_embeds_only_public_license_endpoint(self):
+        from scripts.build_dist import release_config_payload
+
+        self.assertEqual(
+            release_config_payload(
+                "tanimnext/AMZFlow-AI", "https://license.example.workers.dev"
+            ),
+            {
+                "github_repository": "tanimnext/AMZFlow-AI",
+                "license_api_url": "https://license.example.workers.dev",
+            },
+        )
+        with self.assertRaises(ValueError):
+            release_config_payload("tanimnext/AMZFlow-AI", "http://localhost:8787")
+
     def test_checksum_file_always_uses_portable_lf_newline(self):
         from scripts.build_dist import write_checksum
 

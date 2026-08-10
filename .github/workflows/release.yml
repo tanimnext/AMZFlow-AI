@@ -71,7 +71,11 @@ jobs:
         run: brew install ffmpeg
       - run: python -m pip install -r requirements-build.txt
       - name: Build portable ZIP
-        run: python scripts/build_dist.py --version "${{ steps.version.outputs.value }}" --github-repository "${{ github.repository }}"
+        run: >-
+          python scripts/build_dist.py
+          --version "${{ steps.version.outputs.value }}"
+          --github-repository "${{ github.repository }}"
+          --license-api-url "${{ vars.LICENSE_API_URL }}"
       - uses: actions/upload-artifact@v4
         with:
           name: portable-${{ runner.os }}

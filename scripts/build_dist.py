@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+HTTPS_URL = re.compile(r"^https://[A-Za-z0-9.-]+(?::\d+)?(?:/[A-Za-z0-9._~/-]*)?$")
 
 
 def host_platform_key() -> str:
@@ -34,6 +35,16 @@ def artifact_base(version: str, target: str) -> str:
     if not SEMVER.fullmatch(version):
         raise ValueError("Version must use X.Y.Z semantic version format")
     return f"AmzFlow-AI-{version}-{target}"
+
+
+def release_config_payload(repository: str, license_api_url: str) -> dict[str, str]:
+    endpoint = str(license_api_url).strip().rstrip("/")
+    if not HTTPS_URL.fullmatch(endpoint):
+        raise ValueError("License API URL must be a public HTTPS endpoint")
+    return {
+        "github_repository": str(repository).strip(),
+        "license_api_url": endpoint,
+    }
 
 
 def _set_version(release_version: str) -> None:
@@ -103,7 +114,7 @@ def _binary_arg(source: Path) -> str:
     return f"{source}{os.pathsep}bin"
 
 
-def build(release_version: str, repository: str, ffmpeg_dir: Path | None) -> Path:
+def build(release_version: str, repository: str, license_api_url: str, ffmpeg_dir: Path | None) -> Path:
     target = host_platform_key()
     base = artifact_base(release_version, target)
     ffmpeg = _find_tool("ffmpeg", ffmpeg_dir)
@@ -122,7 +133,7 @@ def build(release_version: str, repository: str, ffmpeg_dir: Path | None) -> Pat
         generated = Path(temp)
         config = generated / "release_config.json"
         config.write_text(
-            json.dumps({"github_repository": repository}, indent=2) + "\n",
+            json.dumps(release_config_payload(repository, license_api_url), indent=2) + "\n",
             encoding="utf-8",
         )
         kokoro_model = _stage_kokoro_model(generated / "models")
@@ -187,6 +198,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", default=(ROOT / "VERSION").read_text().strip())
     parser.add_argument("--github-repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
+    parser.add_argument("--license-api-url", default=os.environ.get("AMZFLOW_LICENSE_API_URL", ""))
     parser.add_argument("--ffmpeg-dir", type=Path, default=os.environ.get("FFMPEG_DIR"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -195,7 +207,7 @@ def main() -> int:
     if args.dry_run:
         print(json.dumps({"version": args.version, "target": target, "artifact": f"{base}.zip"}))
         return 0
-    archive = build(args.version, args.github_repository, args.ffmpeg_dir)
+    archive = build(args.version, args.github_repository, args.license_api_url, args.ffmpeg_dir)
     print(f"Created {archive}")
     print(f"Created {archive}.sha256")
     return 0

@@ -19,3 +19,21 @@ jobs:
       - run: python -m pip install -r web_app/requirements_web.txt
       - run: python -m unittest discover -s tests -v
       - run: python -m compileall app_files web_app scripts desktop_main.py desktop_updater.py
+
+  license-worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: license-worker
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: license-worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm audit --audit-level=high
+      - run: npx wrangler deploy --dry-run
