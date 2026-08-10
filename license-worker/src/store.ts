@@ -9,6 +9,7 @@ export interface LicenseRecord {
   expiryTime: string;
   activationCodeHash: string;
   tokenVersion: number;
+  rowNumber?: number;
 }
 
 export interface LicenseStore {
