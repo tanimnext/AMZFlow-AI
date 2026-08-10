@@ -220,9 +220,14 @@ import hashlib
 # Backed by a local JSON store (web_app/users.json) managed via the admin
 # dashboard (admin_app.py) instead of Google Sheets.
 
-def verify_activation(email, user_name_input=None):
+def verify_activation(email, user_name_input=None, activation_code=None):
     current_machine = get_machine_id()
-    success, res = license_store.verify_activation_local(email, current_machine, user_name_input)
+    if activation_code:
+        success, res = license_store.activate_license(
+            email, user_name_input or "", current_machine, activation_code
+        )
+    else:
+        success, res = license_store.verify_activation_local(email, current_machine)
     if success:
         email_clean = email.strip().lower()
         session['is_activated'] = True
@@ -233,13 +238,6 @@ def verify_activation(email, user_name_input=None):
         session['expiry_date'] = res['expiry_date']
         session['expiry_time'] = res['expiry_time']
         session['last_activation_check'] = time.time()
-
-        # Hidden local activation to remember state (optional per guide)
-        try:
-            with open(ACTIVATION_FILE, 'w') as f:
-                f.write(email_clean)
-            os.chmod(ACTIVATION_FILE, 0o600)
-        except: pass
 
     return success, res
 
@@ -464,15 +462,10 @@ def check_user_license():
             return success, res
             
     # সেশনে না থাকলে লোকাল ডট ফাইল চেক করা
-    act_file = str(ACTIVATION_FILE)
-    if os.path.exists(act_file):
-        try:
-            with open(act_file, 'r') as f:
-                saved_email = f.read().strip()
-                if saved_email:
-                    success, res = verify_activation(saved_email)
-                    return success, res
-        except: pass
+    saved_email = license_store.saved_activation_email()
+    if saved_email:
+        success, res = verify_activation(saved_email)
+        return success, res
         
     return False, "Not activated"
 
@@ -639,10 +632,11 @@ def activate():
             data = request.get_json()
             email = data.get('email')
             user_name = data.get('name')
-            if not email:
-                return jsonify({"success": False, "error": "Email is required"})
+            activation_code = data.get('activationCode')
+            if not email or not user_name or not activation_code:
+                return jsonify({"success": False, "error": "Name, email, and activation code are required"})
             
-            success, res = verify_activation(email, user_name)
+            success, res = verify_activation(email, user_name, activation_code)
             if success:
                 return jsonify({"success": True})
             else:

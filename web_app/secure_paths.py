@@ -6,7 +6,10 @@ import os
 import shutil
 from pathlib import Path
 
-from branding import BRAND
+try:
+    from .branding import BRAND
+except ImportError:  # frozen application imports modules from web_app on sys.path
+    from branding import BRAND
 
 
 # The v6.x product name. Existing installs keep every credential, the license

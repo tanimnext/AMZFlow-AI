@@ -1,295 +1,241 @@
-"""Google-Sheets-backed license/user store.
+"""HTTPS client for the server-side license service.
 
-Uses the service account from the private application-data directory and the
-configured Google Sheet — credentials never need to live in the source tree.
-
-Sheet columns (row 1 = header): A=Name, B=Email, C=MachineID, D=LastLogin,
-E=Used, F=Quota, G=ExpiryDate, H=ExpiryTime
+The desktop distribution contains only the public API URL. Google credentials,
+the signing secret, and the license database remain on the Cloudflare Worker.
 """
+from __future__ import annotations
+
+import json
 import os
-from datetime import datetime
+import re
+from pathlib import Path
+from urllib.parse import quote
 
-from googleapiclient.discovery import build
-from google.oauth2 import service_account
-from google.auth.transport.requests import AuthorizedSession
+import requests
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-from secure_paths import SERVICE_ACCOUNT_FILE
-
-CONFIG_PATH = str(SERVICE_ACCOUNT_FILE)
-
-# From: https://docs.google.com/spreadsheets/d/1OGbP51wSvk4W3_FlNtmuncRTpmaxTJ5qpLEfMyLP5OY/edit
-SHEET_ID = "1OGbP51wSvk4W3_FlNtmuncRTpmaxTJ5qpLEfMyLP5OY"
-RANGE = "Sheet1!A:H"
+try:
+    from .runtime_support import resource_dir
+    from .secure_paths import ACTIVATION_FILE, DATA_DIR
+except ImportError:  # frozen application imports modules from web_app on sys.path
+    from runtime_support import resource_dir
+    from secure_paths import ACTIVATION_FILE, DATA_DIR
 
 
-GOOGLE_SHEETS_TIMEOUT_SECONDS = 12
+REQUEST_TIMEOUT_SECONDS = 12
+ADMIN_TOKEN_FILE = DATA_DIR / "license_admin_token.txt"
+_HTTPS_API = re.compile(r"^https://[A-Za-z0-9.-]+(?::\d+)?(?:/[A-Za-z0-9._~/-]*)?$")
 
 
-class _RequestsHttpAdapter:
-    """Swap httplib2 for requests to avoid SSL issues on some Windows setups.
-
-    Every call through this adapter now has a bounded timeout. Without one,
-    `requests` waits forever by default -- and since every page view calls
-    verify_activation_local(), a single unreachable/slow connection to
-    sheets.googleapis.com (offline, firewalled, DNS hiccup) hung EVERY page
-    load in the whole app for as long as the underlying transport happened to
-    wait (observed: 120s per request) before finally redirecting.
-    """
-    def __init__(self, session):
-        self.session = session
-
-    def request(self, uri, method="GET", body=None, headers=None, **kwargs):
-        kwargs.setdefault("timeout", GOOGLE_SHEETS_TIMEOUT_SECONDS)
-        resp = self.session.request(method=method, url=uri, data=body, headers=headers, **kwargs)
-        class ResponseWrapper(dict):
-            def __init__(self, r):
-                super().__init__({k.lower(): v for k, v in r.headers.items()})
-                self.status = r.status_code
-                self.reason = r.reason
-        return ResponseWrapper(resp), resp.content
-
-
-def _get_service():
-    if not os.path.exists(CONFIG_PATH):
-        print(f"[CRITICAL] {CONFIG_PATH} missing. Add your own service-account JSON key here.")
-        return None
+def _api_url():
+    override = os.environ.get("AMZFLOW_LICENSE_API_URL", "").strip().rstrip("/")
+    if override:
+        return override if _HTTPS_API.fullmatch(override) else ""
     try:
-        creds = service_account.Credentials.from_service_account_file(
-            CONFIG_PATH,
-            scopes=['https://www.googleapis.com/auth/spreadsheets']
-        )
-        session_obj = AuthorizedSession(creds)
-        adapter = _RequestsHttpAdapter(session_obj)
-        return build('sheets', 'v4', http=adapter, static_discovery=True)
-    except Exception as e:
-        print(f"[CRITICAL] Error building Sheets service: {e}")
-        return None
+        config = json.loads((resource_dir() / "release_config.json").read_text(encoding="utf-8"))
+        value = str(config.get("license_api_url", "")).strip().rstrip("/")
+        return value if _HTTPS_API.fullmatch(value) else ""
+    except (OSError, ValueError, TypeError):
+        return ""
 
 
-def _row_to_user(row):
+def _activation_state():
+    try:
+        value = json.loads(Path(ACTIVATION_FILE).read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            return {}
+        required = ("email", "machine_id", "activation_token")
+        return value if all(isinstance(value.get(key), str) and value[key] for key in required) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def saved_activation_email():
+    return _activation_state().get("email", "")
+
+
+def _save_activation(email, machine_id, token):
+    target = Path(ACTIVATION_FILE)
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = target.with_name(f"{target.name}.tmp")
+    temporary.write_text(json.dumps({
+        "email": email.strip().lower(),
+        "machine_id": machine_id,
+        "activation_token": token,
+    }), encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(target)
+    target.chmod(0o600)
+
+
+def _license(payload):
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid license response")
+    required = ("email", "name", "used", "quota", "expiryDate", "expiryTime")
+    if any(key not in payload for key in required):
+        raise ValueError("Invalid license response")
     return {
-        "name": row[0].strip() if len(row) > 0 else "",
-        "email": row[1].strip().lower() if len(row) > 1 else "",
-        "machine_id": row[2].strip() if len(row) > 2 else "",
-        "last_login": row[3].strip() if len(row) > 3 else "",
-        "used": row[4].strip() if len(row) > 4 and row[4].strip() else "0",
-        "quota": row[5].strip() if len(row) > 5 and row[5].strip() else "Unlimited",
-        "expiry_date": row[6].strip() if len(row) > 6 else "",
-        "expiry_time": row[7].strip() if len(row) > 7 else "00:00",
+        "email": str(payload["email"]).strip().lower(),
+        "name": str(payload["name"]).strip(),
+        "used": payload["used"],
+        "quota": payload["quota"],
+        "expiry_date": str(payload["expiryDate"]),
+        "expiry_time": str(payload["expiryTime"]),
     }
 
 
-def _fetch_rows(service):
-    result = service.spreadsheets().values().get(spreadsheetId=SHEET_ID, range=RANGE).execute()
-    return result.get('values', [])
+def _request(method, path, *, body=None, bearer=""):
+    base = _api_url()
+    if not base:
+        return False, "License service is not configured. Please install the latest release."
+    headers = {"Accept": "application/json", "User-Agent": "AmzFlow-AI-Desktop"}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    try:
+        response = requests.request(
+            method, f"{base}{path}", json=body, headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS, allow_redirects=False,
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return False, "License service is unavailable. Check your internet connection and try again."
+    if 200 <= response.status_code < 300:
+        return True, payload
+    message = "License request failed. Please verify your details and try again."
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        candidate = payload["error"].get("message")
+        if isinstance(candidate, str) and 0 < len(candidate) <= 200:
+            message = candidate
+    return False, message
+
+
+def activate_license(email, name, machine_id, activation_code):
+    success, payload = _request("POST", "/v1/activations", body={
+        "email": str(email).strip().lower(), "name": str(name).strip(),
+        "machineId": str(machine_id), "activationCode": str(activation_code).strip().lower(),
+    })
+    if not success:
+        return False, payload
+    try:
+        data = payload["data"]
+        token = data["activationToken"]
+        if not isinstance(token, str) or not token.startswith("v1.") or len(token) > 4096:
+            raise ValueError("Invalid activation token")
+        result = _license(data["license"])
+        _save_activation(result["email"], machine_id, token)
+        return True, result
+    except (KeyError, TypeError, ValueError, OSError):
+        return False, "License service returned an invalid response."
+
+
+def verify_activation_local(email, current_machine_id, user_name_input=None):
+    state = _activation_state()
+    if state.get("email") != str(email or "").strip().lower() or state.get("machine_id") != current_machine_id:
+        return False, "Activation is required for this computer."
+    success, payload = _request(
+        "POST", "/v1/licenses/verify", body={"machineId": current_machine_id},
+        bearer=state["activation_token"],
+    )
+    if not success:
+        return False, payload
+    try:
+        return True, _license(payload["data"]["license"])
+    except (KeyError, TypeError, ValueError):
+        return False, "License service returned an invalid response."
+
+
+def update_usage(email, count):
+    state = _activation_state()
+    if state.get("email") != str(email or "").strip().lower():
+        return False, "Activation is required."
+    success, payload = _request(
+        "POST", "/v1/usage",
+        body={"machineId": state["machine_id"], "used": int(count)},
+        bearer=state["activation_token"],
+    )
+    return (True, "Updated") if success else (False, payload)
+
+
+def _admin_token():
+    value = os.environ.get("AMZFLOW_LICENSE_ADMIN_TOKEN", "").strip()
+    if value:
+        return value
+    try:
+        return ADMIN_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _admin_request(method, path, body=None):
+    token = _admin_token()
+    if len(token) < 32:
+        return False, "License admin token is not configured on this computer."
+    return _request(method, path, body=body, bearer=token)
 
 
 def list_users():
-    service = _get_service()
-    if not service:
+    success, payload = _admin_request("GET", "/v1/admin/users?page=1&pageSize=100")
+    if not success:
         return []
     try:
-        rows = _fetch_rows(service)
-        users = []
-        for i, row in enumerate(rows):
-            if i == 0:
-                continue
-            if len(row) < 2 or not row[1].strip():
-                continue
-            users.append(_row_to_user(row))
-        return users
-    except Exception as e:
-        print(f"[ERROR] list_users: {e}")
+        return [_license(user) | {"machine_id": "", "last_login": ""} for user in payload["data"]]
+    except (KeyError, TypeError, ValueError):
         return []
 
 
 def find_user(email):
-    email_clean = email.strip().lower()
-    for u in list_users():
-        if u['email'] == email_clean:
-            return u
-    return None
+    target = str(email).strip().lower()
+    return next((user for user in list_users() if user["email"] == target), None)
+
+
+def _quota(value):
+    if str(value).strip().lower() == "unlimited":
+        return "Unlimited"
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
 
 
 def add_user(name, email, expiry_date="Lifetime", expiry_time="00:00", quota="Unlimited"):
-    service = _get_service()
-    if not service:
-        return False, "Database Connection Error"
+    success, payload = _admin_request("POST", "/v1/admin/users", {
+        "name": str(name).strip(), "email": str(email).strip().lower(), "quota": _quota(quota),
+        "expiryDate": expiry_date or "Lifetime", "expiryTime": expiry_time or "00:00",
+    })
+    if not success:
+        return False, payload
     try:
-        email_clean = email.strip().lower()
-        if find_user(email_clean):
-            return False, "User with this email already exists"
-
-        row = [name.strip(), email_clean, "", "", "0", quota or "Unlimited",
-               expiry_date or "Lifetime", expiry_time or "00:00"]
-        service.spreadsheets().values().append(
-            spreadsheetId=SHEET_ID,
-            range=RANGE,
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
-            body={"values": [row]}
-        ).execute()
-        return True, "User added"
-    except Exception as e:
-        print(f"[ERROR] add_user: {e}")
-        return False, f"System Error: {e}"
-
-
-_FIELD_COLUMN = {
-    "name": "A",
-    "machine_id": "C",
-    "last_login": "D",
-    "used": "E",
-    "quota": "F",
-    "expiry_date": "G",
-    "expiry_time": "H",
-}
-
-
-def _find_row_index(service, email_clean):
-    rows = _fetch_rows(service)
-    for i, row in enumerate(rows):
-        if i == 0:
-            continue
-        if len(row) > 1 and row[1].strip().lower() == email_clean:
-            return i, row
-    return None, None
+        return True, f"User added. Activation code: {payload['data']['activationCode']}"
+    except (KeyError, TypeError):
+        return False, "License service returned an invalid response."
 
 
 def update_user(email, **fields):
-    service = _get_service()
-    if not service:
-        return False, "Database Connection Error"
-    try:
-        email_clean = email.strip().lower()
-        idx, _ = _find_row_index(service, email_clean)
-        if idx is None:
-            return False, "User not found"
-
-        for field, value in fields.items():
-            col = _FIELD_COLUMN.get(field)
-            if not col:
-                continue
-            service.spreadsheets().values().update(
-                spreadsheetId=SHEET_ID,
-                range=f"Sheet1!{col}{idx + 1}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[value]]}
-            ).execute()
-        return True, "Updated"
-    except Exception as e:
-        print(f"[ERROR] update_user: {e}")
-        return False, f"System Error: {e}"
+    mapping = {"name": "name", "quota": "quota", "expiry_date": "expiryDate", "expiry_time": "expiryTime"}
+    body = {mapping[key]: (_quota(value) if key == "quota" else value) for key, value in fields.items() if key in mapping}
+    success, payload = _admin_request("PATCH", f"/v1/admin/users/{quote(str(email).strip().lower(), safe='')}", body)
+    return (True, "Updated") if success else (False, payload)
 
 
 def delete_user(email):
-    service = _get_service()
-    if not service:
-        return False, "Database Connection Error"
-    try:
-        email_clean = email.strip().lower()
-        idx, _ = _find_row_index(service, email_clean)
-        if idx is None:
-            return False, "User not found"
+    success, payload = _admin_request("DELETE", f"/v1/admin/users/{quote(str(email).strip().lower(), safe='')}")
+    return (True, "Deleted") if success else (False, payload)
 
-        service.spreadsheets().values().clear(
-            spreadsheetId=SHEET_ID,
-            range=f"Sheet1!A{idx + 1}:H{idx + 1}",
-            body={}
-        ).execute()
-        return True, "Deleted"
-    except Exception as e:
-        print(f"[ERROR] delete_user: {e}")
-        return False, f"System Error: {e}"
+
+def _admin_action(email, action, success_message):
+    success, payload = _admin_request("POST", f"/v1/admin/users/{quote(str(email).strip().lower(), safe='')}/{action}", {})
+    if not success:
+        return False, payload
+    code = payload.get("data", {}).get("activationCode") if isinstance(payload, dict) else None
+    return True, f"{success_message}. Activation code: {code}" if code else success_message
 
 
 def reset_machine(email):
-    return update_user(email, machine_id="")
+    return _admin_action(email, "reset-machine", "Machine binding reset")
 
 
 def reset_usage(email):
-    return update_user(email, used="0")
+    return _admin_action(email, "reset-usage", "Usage counter reset")
 
 
-def update_usage(email, count):
-    return update_user(email, used=str(count))
-
-
-def verify_activation_local(email, current_machine_id, user_name_input=None):
-    service = _get_service()
-    if not service:
-        return False, "Database Connection Error"
-
-    try:
-        rows = _fetch_rows(service)
-        if not rows:
-            return False, "Activation list is empty"
-
-        email_clean = email.strip().lower()
-
-        for i, row in enumerate(rows):
-            if i == 0:
-                continue
-            if len(row) < 2:
-                continue
-
-            sheet_name = row[0].strip() if len(row) > 0 else ""
-            sheet_email = row[1].strip().lower()
-            if sheet_email != email_clean:
-                continue
-
-            sheet_machine = row[2].strip() if len(row) > 2 else ""
-            sheet_used = row[4].strip() if len(row) > 4 and row[4].strip() else "0"
-            sheet_quota = row[5].strip() if len(row) > 5 and row[5].strip() else "Unlimited"
-            sheet_expiry_date = row[6] if len(row) > 6 else ""
-            sheet_expiry_time = row[7] if len(row) > 7 else "00:00"
-
-            if user_name_input and not sheet_name:
-                service.spreadsheets().values().update(
-                    spreadsheetId=SHEET_ID,
-                    range=f"Sheet1!A{i + 1}",
-                    valueInputOption="USER_ENTERED",
-                    body={"values": [[user_name_input]]}
-                ).execute()
-                sheet_name = user_name_input
-
-            if not sheet_machine:
-                service.spreadsheets().values().update(
-                    spreadsheetId=SHEET_ID,
-                    range=f"Sheet1!C{i + 1}",
-                    valueInputOption="USER_ENTERED",
-                    body={"values": [[current_machine_id]]}
-                ).execute()
-            elif sheet_machine.lower() != current_machine_id.lower():
-                return False, "Device Mismatch. Locked to another computer."
-
-            if sheet_expiry_date and sheet_expiry_date.lower() != "lifetime":
-                try:
-                    expiry_dt = datetime.strptime(f"{sheet_expiry_date} {sheet_expiry_time}", "%Y-%m-%d %H:%M")
-                    if datetime.now() > expiry_dt:
-                        return False, f"Subscription Expired on {sheet_expiry_date}"
-                except ValueError:
-                    pass
-
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            service.spreadsheets().values().update(
-                spreadsheetId=SHEET_ID,
-                range=f"Sheet1!D{i + 1}",
-                valueInputOption="USER_ENTERED",
-                body={"values": [[now_str]]}
-            ).execute()
-
-            return True, {
-                "email": email_clean,
-                "name": sheet_name or email_clean.split('@')[0],
-                "quota": sheet_quota,
-                "used": sheet_used,
-                "expiry_date": sheet_expiry_date,
-                "expiry_time": sheet_expiry_time,
-            }
-
-        return False, "Email not found in authorized list."
-    except Exception as e:
-        print(f"[ERROR] verify_activation_local: {e}")
-        return False, f"System Error: {e}"
+def generate_activation_code(email):
+    return _admin_action(email, "activation-code", "Activation code generated")
