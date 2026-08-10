@@ -65,7 +65,13 @@ jobs:
           echo "value=${release_version}" >> "$GITHUB_OUTPUT"
       - name: Install FFmpeg (Windows)
         if: runner.os == 'Windows'
-        run: choco install ffmpeg --no-progress -y
+        # choco puts a shim on PATH, not the real binary, so locate the real
+        # ffmpeg.exe under the package tree instead of relying on `which`.
+        run: |
+          choco install ffmpeg --no-progress -y
+          $real = Get-ChildItem -Path "C:\ProgramData\chocolatey\lib\ffmpeg" -Filter ffmpeg.exe -Recurse -File | Select-Object -First 1
+          if (-not $real) { throw "ffmpeg.exe not found under the chocolatey package tree" }
+          echo "FFMPEG_DIR=$($real.DirectoryName)" >> $env:GITHUB_ENV
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'
         run: brew install ffmpeg
