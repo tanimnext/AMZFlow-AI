@@ -372,10 +372,14 @@ def _resolve_redirect_target(url: str, *, session=None, timeout=5, max_hops=4) -
 def extract_article(source_url: str, html_text: str, *, resolve_redirects: bool = True) -> dict:
     parser = _ArticleParser()
     parser.feed(str(html_text or "")[:3_000_000])
-    raw_title = parser.meta_title or (parser.title_parts[0] if parser.title_parts else "")
-    raw_title = _clean_text(raw_title, 200) or _humanize_slug(
-        urlsplit(source_url).path.rsplit("/", 1)[-1]
-    )
+    # The URL slug is the keyword source (de-hyphenated, title-cased by
+    # _humanize_slug) -- it's what the source site optimized for SEO, and
+    # skips whatever a <title> tag adds on top (site branding, "| Reviews
+    # 2026", etc). The page's own title is only a fallback for URLs with no
+    # usable slug (bare domain, numeric/ID-only path, and similar).
+    slug_title = _humanize_slug(urlsplit(source_url).path.rsplit("/", 1)[-1])
+    meta_title = _clean_text(parser.meta_title or (parser.title_parts[0] if parser.title_parts else ""), 200)
+    raw_title = slug_title or meta_title
     title = _strip_site_suffix(raw_title, parser.site_name, urlsplit(source_url).hostname or "")
 
     products: list[dict] = []

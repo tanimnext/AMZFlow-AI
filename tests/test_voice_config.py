@@ -13,7 +13,8 @@ class GeminiVoiceConfigTests(unittest.TestCase):
         self.assertIn("gemini-3.1-flash-tts-preview", GEMINI_TTS_MODELS)
         self.assertIn("gemini-2.5-pro-preview-tts", GEMINI_TTS_MODELS)
         self.assertEqual(len(GEMINI_TTS_VOICES), 30)
-        self.assertEqual(GEMINI_TTS_VOICES["Sadaltager"], "Knowledgeable")
+        # Voice labels include gender now (Chirp3-HD voice list), not just style.
+        self.assertEqual(GEMINI_TTS_VOICES["Sadaltager"], "Knowledgeable (Male)")
 
     def test_normalizes_untrusted_voice_settings(self):
         settings = normalize_gemini_tts_settings(

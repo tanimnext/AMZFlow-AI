@@ -146,10 +146,13 @@ COLOR_PRODUCT_TITLE = "#FFFFFF"
 COLOR_PRODUCT_BG = "#000000"
 VAL_PRODUCT_BG_OPACITY = 0.8
 
+# 0.7 made the intro/outro background image read as nearly black-and-white
+# (a heavy black scrim on top of the actual photo) -- dropped to 0.35, which
+# still keeps overlaid title text legible without crushing the image color.
 COLOR_INTRO_OVERLAY_BG = "#000000"
-VAL_INTRO_OVERLAY_OPACITY = 0.7
+VAL_INTRO_OVERLAY_OPACITY = 0.35
 COLOR_OUTRO_OVERLAY_BG = "#000000"
-VAL_OUTRO_OVERLAY_OPACITY = 0.7
+VAL_OUTRO_OVERLAY_OPACITY = 0.35
 
 COLOR_BLUEBAR = "#007bff"
 COLOR_RANK_BG = "#FFD700"
@@ -178,6 +181,21 @@ REMBG_MODEL = "birefnet-general"
 ACTIVE_TRANSITIONS = ["fade", "wipeleft", "wiperight", "wipeup", "wipedown", "slideleft", "slideright", "slideup", "slidedown", "circlecrop", "rectcrop", "distance", "fadeblack", "fadewhite", "radial", "smoothleft", "smoothright", "smoothup", "smoothdown", "circleopen", "circleclose", "vertopen", "vertclose", "horzopen", "horzclose", "dissolve", "pixelize", "diagtl", "diagtr", "diagbl", "diagbr", "hlslice"]
 SAFE_TRANSITIONS = frozenset(ACTIVE_TRANSITIONS)
 SHORTS_MODE = False
+# Output resolution: 1080x1920 (Shorts, 9:16) / 1920x1080 (Normal, 16:9).
+# zoompan works at 2x this and downsamples on export, which is what keeps
+# slow pans/zooms smooth instead of visibly stepping.
+def output_resolution():
+    return (1080, 1920) if SHORTS_MODE else (1920, 1080)
+
+
+def zoom_working_resolution():
+    w, h = output_resolution()
+    return w * 2, h * 2
+
+
+# Scales absolute font/padding sizes that were tuned for the legacy
+# 720x1280/1280x720 canvas up to the new 1080x1920/1920x1080 one.
+TEXT_SCALE = 1.5
 CONTENT_MODE = "spec_based"
 HANDS_ON_NOTES = ""
 # Whole-video speed multiplier (picture + narration together), 0.75-1.5x.
@@ -709,12 +727,12 @@ def wrap_lines_for_overlay(text, width, max_lines):
     )
     return clipped
 
-def fit_and_pad_filter(w=1280, h=720):
-    if SHORTS_MODE:
-        w, h = 720, 1280
+def fit_and_pad_filter(w=None, h=None):
+    if w is None or h is None:
+        w, h = output_resolution()
     return f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1"
 
-def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_intro=False, is_rank=False, branding_filters=None, is_outro_single=False, draw_text=True):
+def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_intro=False, is_rank=False, branding_filters=None, is_outro_single=False, draw_text=True, hook_video_path=None):
     """Creates a text slide using FFmpeg with image or video background."""
     # Duration formula lives in slide_duration() so the timeline planner and
     # this renderer never disagree (see slide_duration's docstring).
@@ -757,17 +775,42 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
     font_path = escape_path(font_raw_path)
     
     inputs = []
-    is_video = False
-    
-    if bg_path and os.path.exists(bg_path):
+    bg_input_count = 0
+
+    # Intro hook: a short (1-4s) look at the still background image, then a
+    # cut to the first product's real footage for the rest of the slide,
+    # instead of one static image for the whole intro. Falls back to the
+    # plain single-image path below on any problem building this chain.
+    hook_chain_ok = False
+    if is_intro and hook_video_path and os.path.exists(hook_video_path) and bg_path and os.path.exists(bg_path) and \
+            not bg_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv')):
+        try:
+            hook_dur = min(4.0, max(1.0, duration * 0.35))
+            video_dur = max(0.5, duration - hook_dur)
+            inputs.extend(["-loop", "1", "-t", f"{hook_dur:.3f}", "-i", bg_path])
+            inputs.extend(["-stream_loop", "-1", "-i", hook_video_path])
+            bg_input_count = 2
+            filter_base = (
+                f"[0:v]{fit_and_pad_filter()},trim=0:{hook_dur:.3f},setpts=PTS-STARTPTS[introhook];"
+                f"[1:v]{fit_and_pad_filter()},trim=0:{video_dur:.3f},setpts=PTS-STARTPTS[introvid];"
+                f"[introhook][introvid]concat=n=2:v=1:a=0"
+            )
+            hook_chain_ok = True
+        except Exception as e:
+            print(f"[WARN] Intro hook chain skipped, falling back to still image: {e}")
+            inputs = []
+            bg_input_count = 0
+
+    if not hook_chain_ok and bg_path and os.path.exists(bg_path):
         if bg_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv')):
             inputs.extend(["-stream_loop", "-1", "-i", bg_path])
-            is_video = True
             filter_base = f"[0:v]{fit_and_pad_filter()}"
         else:
             inputs.extend(["-loop", "1", "-i", bg_path])
             filter_base = f"[0:v]{fit_and_pad_filter()}"
-        
+        bg_input_count = 1
+
+    if bg_input_count:
         # Apply the main background overlay (dimming effect) using global settings
         # This uses Intro or Outro specific settings
         # This is the FULL SCREEN darken/overlay, not the text box background.
@@ -777,8 +820,13 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
         else:
             main_ov_color = COLOR_OUTRO_OVERLAY_BG if str(COLOR_OUTRO_OVERLAY_BG).startswith('#') else "black"
             main_ov_opacity = VAL_OUTRO_OVERLAY_OPACITY
-            
-        filter_chain = f"{filter_base},drawbox=t=fill:c={main_ov_color}@{main_ov_opacity}"
+
+        # Rank/number transition screens keep the background image clean --
+        # only intro/outro title slides get the full-screen dimming scrim.
+        if is_rank:
+            filter_chain = filter_base
+        else:
+            filter_chain = f"{filter_base},drawbox=t=fill:c={main_ov_color}@{main_ov_opacity}"
     else:
         # Generate solid color background if no background asset exists
         # In this case, we use the respective Title BG color as the whole background
@@ -786,36 +834,40 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
             bg_solid_color = COLOR_INTRO_BG
         else:
             bg_solid_color = COLOR_OUTRO_BG
-            
+
         if str(bg_solid_color).startswith('#'):
             bg_solid_color = bg_solid_color.replace('#', '0x')
-        color_s = "720x1280" if SHORTS_MODE else "1280x720"
+        color_s = "1080x1920" if SHORTS_MODE else "1920x1080"
         inputs.extend(["-f", "lavfi", "-i", f"color=c={bg_solid_color}:s={color_s}:r=25:d={duration}"])
+        bg_input_count = 1
         filter_chain = "[0:v]null"
 
-    
-    # Audio input
+
+    # Audio input -- index follows however many background inputs were used.
     if audio_path and os.path.exists(audio_path):
         inputs.extend(["-i", audio_path])
-        audio_map_args = ["-map", "1:a"]
+        audio_map_args = ["-map", f"{bg_input_count}:a"]
     else:
         # Silent audio
         inputs.extend([
             "-f", "lavfi", "-i",
             f"anullsrc=channel_layout=stereo:sample_rate={AUDIO_SAMPLE_RATE}:d={duration}",
         ])
-        audio_map_args = ["-map", "1:a"]
+        audio_map_args = ["-map", f"{bg_input_count}:a"]
 
     # Draw text
     if is_rank:
         # Using a very large filled circle character and forcing it to be solid
+        circle_size = round(750 * TEXT_SCALE)
+        number_size = round(280 * TEXT_SCALE)
+        circle_y_offset = round(15 * TEXT_SCALE)
         circle_draw = (
             f"drawtext=fontfile='{font_path}':text='●':fontcolor={COLOR_RANK_BG}:"
-            f"fontsize=750:x=(w-text_w)/2:y=(h-text_h)/2-15:enable='gt(t,0.3)'"
+            f"fontsize={circle_size}:x=(w-text_w)/2:y=(h-text_h)/2-{circle_y_offset}:enable='gt(t,0.3)'"
         )
         number_draw = (
             f"drawtext=fontfile='{font_path}':text='{clean_text}':fontcolor=black:"
-            f"fontsize=280:x=(w-text_w)/2:y=(h-text_h)/2:enable='gt(t,0.3)'"
+            f"fontsize={number_size}:x=(w-text_w)/2:y=(h-text_h)/2:enable='gt(t,0.3)'"
         )
         drawtext = f"{circle_draw},{number_draw}"
     else:
@@ -847,6 +899,10 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
         # Determine font size for intro/outro text
         # If text is long, shrink font size to prevent overflow
         text_len_for_sizing = sum(len(l) for l in wrapped_lines) if not is_rank else len(clean_text)
+        # Font sizes below are tuned for the legacy 720x1280/1280x720 canvas;
+        # scale them up with the output resolution (now 1080x1920/1920x1080)
+        # so text stays the same relative size but renders sharp instead of
+        # being upscaled from a smaller source.
         if SHORTS_MODE:
             # Task: Increase font size for BOTH Intro and Outro in SHORTS mode
             f_size = 50
@@ -859,13 +915,15 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
             f_size = 50
             if text_len_for_sizing > 80: f_size = 40
             if text_len_for_sizing > 120: f_size = 35
-        
+        f_size = round(f_size * TEXT_SCALE)
+
         # Build drawtext command - fontfile and text use single quotes, colors do not
         # Padding adjustments:
         if SHORTS_MODE:
             box_p_val = 40
-        else: 
+        else:
             box_p_val = 70
+        box_p_val = round(box_p_val * TEXT_SCALE)
         
         # x='(w-text_w)/2' and y='(h-text_h)/2' are used to center.
         # Fixed potential sub-pixel coordinate jitter by using floor/round with trunc() if needed, 
@@ -882,8 +940,9 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
             f"shadowx=3:shadowy=3:shadowcolor=black@0.6"
         )
         n_lines = len(wrapped_lines)
-        line_step = f_size + 20
-        total_block_h = n_lines * f_size + (n_lines - 1) * 20
+        line_gap = round(20 * TEXT_SCALE)
+        line_step = f_size + line_gap
+        total_block_h = n_lines * f_size + (n_lines - 1) * line_gap
         line_filters = []
         for i, line in enumerate(wrapped_lines):
             y_expr = f"((h-{total_block_h})/2)+{i * line_step}"
@@ -1037,8 +1096,8 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
                 else:
                     frames = int(seg['dur'] * 25) + 25
                     # Zoom filter: Fit to screen first (decrease) then zoom
-                    res_w, res_h = (720, 1280) if SHORTS_MODE else (1280, 720)
-                    zoom_target_w, zoom_target_h = (1440, 2560) if SHORTS_MODE else (2560, 1440)
+                    res_w, res_h = output_resolution()
+                    zoom_target_w, zoom_target_h = zoom_working_resolution()
                     zoom_filter = (
                         f"scale={zoom_target_w}:{zoom_target_h}:force_original_aspect_ratio=decrease,pad={zoom_target_w}:{zoom_target_h}:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1,"
                         f"zoompan=z=''zoom+0.0004'':x=''iw/2-(iw/zoom/2)'':y=''ih/2-(ih/zoom/2)'':d={frames}:s={res_w}x{res_h}:fps=25,"
@@ -1088,8 +1147,8 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
                 # render concatenated a 1280x720 slideshow segment between two
                 # 720x1280 video segments ([vseg1][vslide_final][vseg2]) and
                 # either failed the filtergraph or produced a mangled frame.
-                res_w, res_h = (720, 1280) if SHORTS_MODE else (1280, 720)
-                zoom_target_w, zoom_target_h = (1440, 2560) if SHORTS_MODE else (2560, 1440)
+                res_w, res_h = output_resolution()
+                zoom_target_w, zoom_target_h = zoom_working_resolution()
                 for i, img in enumerate(image_paths):
                     cmd.extend(["-loop", "1", "-t", f"{img_dur:.3f}", "-i", img])
                     frames = int(img_dur * 25) + 25
@@ -1140,8 +1199,8 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         for i, img in enumerate(image_paths):
             # STABLE ZOOM: Higher res input + slower zoom speed + fixed size
             frames = int(img_dur * 25) + 25 # buffer frames
-            res_w, res_h = (720, 1280) if SHORTS_MODE else (1280, 720)
-            zoom_target_w, zoom_target_h = (1440, 2560) if SHORTS_MODE else (2560, 1440)
+            res_w, res_h = output_resolution()
+            zoom_target_w, zoom_target_h = zoom_working_resolution()
             zoom_filter = (
                 f"scale={zoom_target_w}:{zoom_target_h}:force_original_aspect_ratio=decrease,pad={zoom_target_w}:{zoom_target_h}:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1,"
                 f"zoompan=z='zoom+0.0004':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={res_w}x{res_h}:fps=25,"
@@ -1168,47 +1227,52 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         filter_base = "; ".join(filter_parts)
         audio_idx = num_imgs
     else:
-        color_s = "720x1280" if SHORTS_MODE else "1280x720"
+        color_s = "1080x1920" if SHORTS_MODE else "1920x1080"
         cmd.extend(["-f", "lavfi", "-i", f"color=c=white:s={color_s}", "-i", concat_audio])
         filter_base = "[0:v]null[bg]"
         audio_idx = 1
 
     # 3. Add Title Overlay (News Style)
     if clean_title:
+        # Pixel constants below are tuned for the legacy 720x1280/1280x720
+        # canvas; TEXT_SCALE keeps every dimension proportional on the new
+        # 1080x1920/1920x1080 output instead of shrinking relative to frame.
+        S = TEXT_SCALE
         if SHORTS_MODE:
-            frame_h = 1280
-            title_font_size = 30
+            frame_h = round(1280 * S)
+            title_font_size = round(30 * S)
             title_wrap_width = 32
             max_title_lines = 3
-            bottom_margin = 96
+            bottom_margin = round(96 * S)
         else:
-            frame_h = 720
-            title_font_size = 34
+            frame_h = round(720 * S)
+            title_font_size = round(34 * S)
             title_wrap_width = 58
             max_title_lines = 2
-            bottom_margin = 72
+            bottom_margin = round(72 * S)
         wrapped_lines = wrap_lines_for_overlay(
             clean_title,
             width=title_wrap_width,
             max_lines=max_title_lines,
         )
-        
+
         line_count = len(wrapped_lines)
-        
+
         # Dynamic height calculation for the blue bar to match the black box exactly
         # Each line of text is approx 36 pixels with fontsize 35
         # Total height of black box = (line_count * 36) + (2 * box_p)
-        box_p = 20
-        line_h = title_font_size + 5
-        overlay_h = (line_count * line_h) + (box_p * 2) - 4
-        
-        cta_font_size = 20 if SHORTS_MODE else 22
-        cta_box_p = 12 if SHORTS_MODE else 8
-        cta_total_h = cta_font_size + (cta_box_p * 2) + 8
-        header_total_h = 46 if header_text else 0
+        box_p = round(20 * S)
+        line_h = title_font_size + round(5 * S)
+        overlay_h = (line_count * line_h) + (box_p * 2) - round(4 * S)
+
+        cta_font_size = round((20 if SHORTS_MODE else 22) * S)
+        cta_box_p = round((12 if SHORTS_MODE else 8) * S)
+        cta_total_h = cta_font_size + (cta_box_p * 2) + round(8 * S)
+        header_total_h = round(46 * S) if header_text else 0
+        edge_pad = round(24 * S)
         y_pos = min(
-            frame_h - 24,
-            max(bottom_margin, overlay_h + cta_total_h + header_total_h + 24),
+            frame_h - edge_pad,
+            max(bottom_margin, overlay_h + cta_total_h + header_total_h + edge_pad),
         )
         
         # Entrance/Exit timings
@@ -1223,31 +1287,35 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         cta_in_s = max(duration - cta_dur, txt_in_e + 0.1)
         
         # Wrap x_pos and y_pos in logic for Shorts Mode
+        slide_speed = round(130 * S)  # px/sec for the reveal animations
+        reveal_offset = round(65 * S)
+        text_edge_pad = round(15 * S)
         if SHORTS_MODE:
             y_coord = f"H-{y_pos}"
-            layer_w = 640
-            blue_x_base = 30
-            txt_layer_x = 45
+            layer_w = round(640 * S)
+            blue_x_base = round(30 * S)
+            txt_layer_x = round(45 * S)
         else:
             y_coord = f"H-{y_pos}"
-            layer_w = 1120
-            blue_x_base = 50
-            txt_layer_x = 65
+            layer_w = round(1120 * S)
+            blue_x_base = round(50 * S)
+            txt_layer_x = round(65 * S)
 
         # News style sliding reveal logic:
-        blue_x_expr = f"if(lt(t, {bg_in_e}), {blue_x_base-65}+(t-{bg_in_s})*130, if(lt(t, {bg_out_s}), {blue_x_base}, {blue_x_base}-(t-{bg_out_s})*130))"
-        txt_rel_x = f"if(lt(t, {txt_in_e}), -text_w+(t-{txt_in_s})*2*text_w, if(lt(t, {txt_out_s}), 15, 15-(t-{txt_out_s})*2*text_w))"
+        blue_x_expr = f"if(lt(t, {bg_in_e}), {blue_x_base-reveal_offset}+(t-{bg_in_s})*{slide_speed}, if(lt(t, {bg_out_s}), {blue_x_base}, {blue_x_base}-(t-{bg_out_s})*{slide_speed}))"
+        txt_rel_x = f"if(lt(t, {txt_in_e}), -text_w+(t-{txt_in_s})*2*text_w, if(lt(t, {txt_out_s}), {text_edge_pad}, {text_edge_pad}-(t-{txt_out_s})*2*text_w))"
 
-        # CTA Slide Up Logic 
+        # CTA Slide Up Logic
+        cta_gap = round((10 if SHORTS_MODE else 8) * S)
         if SHORTS_MODE:
-            cta_y_expr = f"if(lt(t, {cta_in_s}+0.5), H, H-{y_pos-overlay_h-10})"
-            cta_x_pos = 60
+            cta_y_expr = f"if(lt(t, {cta_in_s}+0.5), H, H-{y_pos-overlay_h-cta_gap})"
+            cta_x_pos = round(60 * S)
         else:
-            cta_y_expr = f"if(lt(t, {cta_in_s}+0.5), H, H-{y_pos-overlay_h-8})"
-            cta_x_pos = 72
-            
+            cta_y_expr = f"if(lt(t, {cta_in_s}+0.5), H, H-{y_pos-overlay_h-cta_gap})"
+            cta_x_pos = round(72 * S)
+
         # Sink logic: moves down/up when title moves
-        cta_final_y = f"if(gt(t, {bg_out_s}), {cta_y_expr}+(t-{bg_out_s})*130, {cta_y_expr})"
+        cta_final_y = f"if(gt(t, {bg_out_s}), {cta_y_expr}+(t-{bg_out_s})*{slide_speed}, {cta_y_expr})"
 
         # Helper to fix color for FFmpeg - 0xRRGGBB format is most reliable
         def fix_color_ffmpeg(c):
@@ -1262,7 +1330,8 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         cta_bg_color = fix_color_ffmpeg(COLOR_LINK_CHECK_BG)
 
         # New overlay design using a separate layer for clipping the reveal effect
-        blue_bar_gen = f"color=c={blue_bar_color}:s=15x{overlay_h}:r=25[bluebar]"
+        blue_bar_w = round(15 * S)
+        blue_bar_gen = f"color=c={blue_bar_color}:s={blue_bar_w}x{overlay_h}:r=25[bluebar]"
         blue_bar_ovl = f"[bg][bluebar]overlay=x='{blue_x_expr}':y={y_coord}:enable='between(t,{bg_in_s},{duration})'[with_blue]"
         
         # Transparent layer for text reveal 
@@ -1298,15 +1367,18 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
 
         # 4. Add Section Header (Introduction, Key Features, etc.) above the title box
         if header_text:
-            # Shift right by 10px to align exactly inline with the Blue Bar's text/shape
-            # Positioned at y={y_coord}-42 for zero gap
-            # Colored Purple (0x800080)
-            # Sliding animation (matching the title box sync)
-            header_x = f"if(lt(t,{bg_in_s}+0.5),-1000+({blue_x_base}+10+1000)*((t-{bg_in_s})/0.5),if(gt(t,{bg_out_s}-0.5),{blue_x_base}+10-({blue_x_base}+10+1000)*((t-({bg_out_s}-0.5))/0.5),{blue_x_base}+10))"
-            
+            # Shift right to align exactly inline with the Blue Bar's text/shape.
+            # Colored Purple (0x800080). Sliding animation (matching the title box sync).
+            header_align = round(10 * S)
+            header_offscreen = round(1000 * S)
+            header_gap = round(42 * S)
+            header_font_size = round(22 * S)
+            header_box_p = round(10 * S)
+            header_x = f"if(lt(t,{bg_in_s}+0.5),-{header_offscreen}+({blue_x_base}+{header_align}+{header_offscreen})*((t-{bg_in_s})/0.5),if(gt(t,{bg_out_s}-0.5),{blue_x_base}+{header_align}-({blue_x_base}+{header_align}+{header_offscreen})*((t-({bg_out_s}-0.5))/0.5),{blue_x_base}+{header_align}))"
+
             header_draw = (
-                f"[v_cta]drawtext=fontfile='{font_path}':text='{sanitize_text(header_text).upper()}':fontsize=22:fontcolor=white:"
-                f"box=1:boxcolor=0x800080@1.0:boxborderw=10:x='{header_x}':y={y_coord}-42:enable='between(t,{bg_in_s},{bg_out_s})'[v_branded]"
+                f"[v_cta]drawtext=fontfile='{font_path}':text='{sanitize_text(header_text).upper()}':fontsize={header_font_size}:fontcolor=white:"
+                f"box=1:boxcolor=0x800080@1.0:boxborderw={header_box_p}:x='{header_x}':y={y_coord}-{header_gap}:enable='between(t,{bg_in_s},{bg_out_s})'[v_branded]"
             )
             filter_complex = f"{filter_base}; {blue_bar_gen}; {blue_bar_ovl}; {text_layer_gen}; {text_draw}; {text_ovl}; {cta_draw}; {header_draw}"
         else:
@@ -1339,8 +1411,8 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
     if badge_path and os.path.exists(badge_path):
         cmd.extend(["-i", badge_path])
         badge_idx = sum(1 for a in cmd if a == "-i") - 1
-        badge_w = 220 if SHORTS_MODE else 260
-        badge_margin = 24
+        badge_w = round((220 if SHORTS_MODE else 260) * TEXT_SCALE)
+        badge_margin = round(24 * TEXT_SCALE)
         badge_in_s = 0.6
         filter_complex += (
             f"; [{badge_idx}:v]scale={badge_w}:-1[badge]; "
@@ -1800,7 +1872,19 @@ CRITICAL RULES:
 5. Tone: natural, specific, balanced, and conversational; avoid generic hype.
 6. Include a buyer-focused hook, best use, meaningful strengths, at least one limitation, who should avoid it, and an honest verdict.
 7. No intro/outro mentions, links, markdown, or calls to buy.
-8. Use short spoken sentences with natural punctuation for human-like TTS.
+8. Write the way someone actually talks, not like a written article -- this
+   script is read aloud by a TTS voice, and formal written sentences sound
+   robotic out loud. Specifically:
+   - Use contractions (it's, you're, doesn't, that's) instead of formal forms.
+   - Keep sentences short. Break up any sentence with more than one idea.
+   - Use natural pauses and punctuation a person would actually speak with:
+     commas, em dashes for a beat ("Here's the good news -- you don't need
+     an expensive model"), and the occasional question to re-engage the
+     listener ("So is it worth the price?").
+   - Vary sentence openings; don't start every sentence the same way.
+   - Example -- NOT: "Today we are going to discuss the best tire inflators
+     available in 2026." INSTEAD: "Looking for a good tire inflator? Here
+     are some of the best options you can grab in 2026."
 9. Output ONLY the script text in plain US English.
 """
 
@@ -2862,10 +2946,14 @@ async def main_pipeline():
 
         # 1. Intro -- uses the styled Thumbnail.jpg (generated above) as its
         # background when available, so the intro visually matches the
-        # thumbnail instead of a plain product photo/video.
+        # thumbnail instead of a plain product photo/video. After a short
+        # (1-4s) hook on that still image, it cuts to the first product's
+        # real footage for the rest of the intro instead of staying on a
+        # static image the whole time -- see hook_video_path below.
         intro_bg_asset = intro_thumb_path if intro_thumb_path and os.path.exists(intro_thumb_path) else bg_asset
+        intro_hook_video = processed[0]['video'] if processed and processed[0].get('video') and os.path.exists(processed[0]['video']) else None
         i_dur = max(get_audio_duration(intro_aud) + 1.0, 2.2)
-        timeline_segments.append({'type': 'intro', 'start': current_time_total, 'dur': i_dur, 'data': (display_title, intro_aud, intro_bg_asset), 'caption_text': intro_txt})
+        timeline_segments.append({'type': 'intro', 'start': current_time_total, 'dur': i_dur, 'data': (display_title, intro_aud, intro_bg_asset, intro_hook_video), 'caption_text': intro_txt})
         current_time_total += i_dur
         
         # 2. Intro Clip (Skip in Shorts Mode)
@@ -2875,7 +2963,7 @@ async def main_pipeline():
             intro_clip_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "intro_clip.mp4")
             if os.path.exists(intro_clip_src):
                 intro_clip_dest = os.path.join(base_dir, "segment_0_clip.mp4")
-                res_w, res_h = (720, 1280) if SHORTS_MODE else (1280, 720)
+                res_w, res_h = output_resolution()
                 normalize_cmd = [
                     "ffmpeg", "-y", "-i", intro_clip_src,
                     "-vf", f"scale={res_w}:{res_h}:force_original_aspect_ratio=decrease,pad={res_w}:{res_h}:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1",
@@ -2988,16 +3076,21 @@ async def main_pipeline():
                     if b['type'] == 'sticky_title':
                         # Sticky title at top:15 (Increased from 4px to 15px for better visibility)
                         # Reduced font size from 32 to 24-28 to prevent overflow on long keywords
-                        b_fsize = 28 if len(b['text']) < 40 else 24
+                        b_fsize = round((28 if len(b['text']) < 40 else 24) * TEXT_SCALE)
+                        b_top_pad = round(15 * TEXT_SCALE)
                         filters.append(
                             f"drawtext=fontfile='{branding_font}':text='{b['text']}':fontcolor=white:fontsize={b_fsize}:"
-                            f"box=1:boxcolor=black@0.6:boxborderw=15:x=(w-text_w)/2:y=15:enable='between(t,{r_s},{r_e})'"
+                            f"box=1:boxcolor=black@0.6:boxborderw={b_top_pad}:x=(w-text_w)/2:y={b_top_pad}:enable='between(t,{r_s},{r_e})'"
                         )
                     else:
-                        x_expr = f"if(lt(t,{r_s+0.5}),W-(t-{r_s})*(tw+60)*2,if(lt(t,{r_e-0.5}),W-tw-60,(W-tw-60)+(t-({r_e-0.5}))*(tw+60)*2))"
+                        b_edge = round(60 * TEXT_SCALE)
+                        x_expr = f"if(lt(t,{r_s+0.5}),W-(t-{r_s})*(tw+{b_edge})*2,if(lt(t,{r_e-0.5}),W-tw-{b_edge},(W-tw-{b_edge})+(t-({r_e-0.5}))*(tw+{b_edge})*2))"
                         col = COLOR_LOGO_TEXT if b['type'] == 'logo' else 'white'
                         bg_col = f"{COLOR_LOGO_BG}@{VAL_LOGO_BG_OPACITY}" if b['type'] == 'logo' else 'red@0.8'
-                        filters.append(f"drawtext=fontfile='{branding_font}':text='{b['text']}':fontcolor={col}:fontsize=40:box=1:boxcolor={bg_col}:boxborderw=10:x='{x_expr}':y=100:enable='between(t,{r_s},{r_e})'")
+                        b_fsize2 = round(40 * TEXT_SCALE)
+                        b_boxpad = round(10 * TEXT_SCALE)
+                        b_top = round(100 * TEXT_SCALE)
+                        filters.append(f"drawtext=fontfile='{branding_font}':text='{b['text']}':fontcolor={col}:fontsize={b_fsize2}:box=1:boxcolor={bg_col}:boxborderw={b_boxpad}:x='{x_expr}':y={b_top}:enable='between(t,{r_s},{r_e})'")
             return filters
 
         # --- RENDER SEGMENTS IN PARALLEL ---
@@ -3014,7 +3107,8 @@ async def main_pipeline():
                 b_filters = get_branding_for_seg(seg['start'], seg['dur'])
                 if seg['type'] == 'intro':
                     using_thumb_bg = bool(intro_thumb_path) and seg['data'][2] == intro_thumb_path
-                    return create_text_slide_ffmpeg(seg['data'][0], seg['data'][1], os.path.join(base_dir, "segment_0_intro.mp4"), bg_path=seg['data'][2], is_intro=True, branding_filters=b_filters, draw_text=not using_thumb_bg)
+                    hook_video = seg['data'][3] if len(seg['data']) > 3 else None
+                    return create_text_slide_ffmpeg(seg['data'][0], seg['data'][1], os.path.join(base_dir, "segment_0_intro.mp4"), bg_path=seg['data'][2], is_intro=True, branding_filters=b_filters, draw_text=not using_thumb_bg, hook_video_path=hook_video)
                 elif seg['type'] == 'clip':
                     if b_filters:
                         branded_clip = seg['path'].replace(".mp4", "_branded.mp4")

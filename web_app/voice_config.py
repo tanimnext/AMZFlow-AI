@@ -11,37 +11,45 @@ GEMINI_TTS_MODELS = {
     "gemini-2.5-flash-preview-tts": "Gemini 2.5 Flash TTS",
 }
 
+# name -> (style descriptor, gender). Gender per Google's Chirp3-HD voice
+# list (the same voice set Gemini TTS uses) -- ai.google.dev's own Gemini
+# TTS docs don't state gender, but Google Cloud's Chirp3-HD reference does.
+GEMINI_TTS_VOICE_INFO = {
+    "Zephyr": ("Bright", "Female"),
+    "Puck": ("Upbeat", "Male"),
+    "Charon": ("Informative", "Male"),
+    "Kore": ("Firm", "Female"),
+    "Fenrir": ("Excitable", "Male"),
+    "Leda": ("Youthful", "Female"),
+    "Orus": ("Firm", "Male"),
+    "Aoede": ("Breezy", "Female"),
+    "Callirrhoe": ("Easy-going", "Female"),
+    "Autonoe": ("Bright", "Female"),
+    "Enceladus": ("Breathy", "Male"),
+    "Iapetus": ("Clear", "Male"),
+    "Umbriel": ("Easy-going", "Male"),
+    "Algieba": ("Smooth", "Male"),
+    "Despina": ("Smooth", "Female"),
+    "Erinome": ("Clear", "Female"),
+    "Algenib": ("Gravelly", "Male"),
+    "Rasalgethi": ("Informative", "Male"),
+    "Laomedeia": ("Upbeat", "Female"),
+    "Achernar": ("Soft", "Female"),
+    "Alnilam": ("Firm", "Male"),
+    "Schedar": ("Even", "Male"),
+    "Gacrux": ("Mature", "Female"),
+    "Pulcherrima": ("Forward", "Female"),
+    "Achird": ("Friendly", "Male"),
+    "Zubenelgenubi": ("Casual", "Male"),
+    "Vindemiatrix": ("Gentle", "Female"),
+    "Sadachbia": ("Lively", "Male"),
+    "Sadaltager": ("Knowledgeable", "Male"),
+    "Sulafat": ("Warm", "Female"),
+}
+
+# Backwards-compatible: name -> "Style (Gender)", e.g. "Bright (Female)".
 GEMINI_TTS_VOICES = {
-    "Zephyr": "Bright",
-    "Puck": "Upbeat",
-    "Charon": "Informative",
-    "Kore": "Firm",
-    "Fenrir": "Excitable",
-    "Leda": "Youthful",
-    "Orus": "Firm",
-    "Aoede": "Breezy",
-    "Callirrhoe": "Easy-going",
-    "Autonoe": "Bright",
-    "Enceladus": "Breathy",
-    "Iapetus": "Clear",
-    "Umbriel": "Easy-going",
-    "Algieba": "Smooth",
-    "Despina": "Smooth",
-    "Erinome": "Clear",
-    "Algenib": "Gravelly",
-    "Rasalgethi": "Informative",
-    "Laomedeia": "Upbeat",
-    "Achernar": "Soft",
-    "Alnilam": "Firm",
-    "Schedar": "Even",
-    "Gacrux": "Mature",
-    "Pulcherrima": "Forward",
-    "Achird": "Friendly",
-    "Zubenelgenubi": "Casual",
-    "Vindemiatrix": "Gentle",
-    "Sadachbia": "Lively",
-    "Sadaltager": "Knowledgeable",
-    "Sulafat": "Warm",
+    name: f"{style} ({gender})" for name, (style, gender) in GEMINI_TTS_VOICE_INFO.items()
 }
 
 VOICE_STYLES = {

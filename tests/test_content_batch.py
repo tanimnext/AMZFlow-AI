@@ -85,7 +85,9 @@ class ArticleExtractionTests(unittest.TestCase):
         )
 
         self.assertEqual(result["contentType"], "ROUNDUP")
-        self.assertEqual(result["keyword"], "Best Robot Vacuums for Pet Hair")
+        # The URL slug ("robot-vacuums") is the keyword source now, not the
+        # page's <title> -- it's what the source site optimized for SEO.
+        self.assertEqual(result["keyword"], "Robot Vacuums")
         self.assertEqual(
             [product["asin"] for product in result["products"]],
             ["B0ABC12345", "B0XYZ98765"],
