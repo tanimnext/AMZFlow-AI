@@ -138,12 +138,31 @@ PROVIDERS = {
         "director": False,
         "paid": True,
     },
+    "vertex_gemini": {
+        "label": "Gemini TTS via Google Cloud (Vertex AI)",
+        "blurb": "Same Gemini voices as \"Gemini TTS\", billed to a Google Cloud project's $300 free-trial credit via a service account instead of a separate API key.",
+        "needs_key": True,
+        "key_field": "vertex_service_account_private_key",
+        "voice_field": "gemini_tts_voice",
+        "model_field": "vertex_tts_model",
+        "voices": "static",
+        "models": "static",
+        "supports_rate": False,
+        "supports_pitch": False,
+        "director": True,
+        "paid": False,
+        "extra_fields": [
+            {"field": "vertex_project_id", "label": "Google Cloud Project ID", "placeholder": "my-project-id"},
+            {"field": "vertex_location", "label": "Region", "placeholder": "us-central1"},
+        ],
+    },
 }
 
 PROVIDER_IDS = tuple(PROVIDERS)
 
 STATIC_MODELS = {
     "gemini": [{"id": key, "label": label} for key, label in GEMINI_TTS_MODELS.items()],
+    "vertex_gemini": [{"id": key, "label": label} for key, label in GEMINI_TTS_MODELS.items()],
     "cartesia": [
         {"id": "sonic-3.5", "label": "Sonic 3.5"},
         {"id": "sonic-3", "label": "Sonic 3"},
@@ -255,6 +274,9 @@ VOICE_FALLBACKS = {
     "edge": _edge_static,
     "kokoro": lambda: [_voice(v, label, group) for v, label, group in KOKORO_VOICES],
     "gemini": lambda: [
+        _voice(name, f"{name} — {style}", "Gemini") for name, style in GEMINI_TTS_VOICES.items()
+    ],
+    "vertex_gemini": lambda: [
         _voice(name, f"{name} — {style}", "Gemini") for name, style in GEMINI_TTS_VOICES.items()
     ],
     "elevenlabs": lambda: [],
@@ -424,6 +446,7 @@ def public_registry(enabled: dict | None = None, custom: list | None = None) -> 
                 "director": spec["director"],
                 "paid": spec["paid"],
                 "custom": False,
+                "extraFields": spec.get("extra_fields", []),
             }
         )
     out.extend(custom or [])

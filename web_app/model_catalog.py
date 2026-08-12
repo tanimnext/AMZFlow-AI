@@ -86,6 +86,28 @@ PROVIDERS = {
         "console_url": None,
         "static_models": ["LongCat-Flash-Chat", "LongCat-Flash-Thinking"],
     },
+    "vertex_gemini": {
+        "label": "Google Cloud (Vertex AI)",
+        "key_field": "vertex_service_account_private_key",
+        "model_field": "vertex_llm_model",
+        "endpoint_field": None,
+        "default_model": "gemini-2.0-flash-001",
+        "keys_help": (
+            "Paste the full service-account JSON (Google Cloud Console -> IAM & Admin "
+            "-> Service Accounts -> Keys -> Add key -> JSON). Grant it the Vertex AI "
+            "User role. Billed to that project, so its $300 free-trial credit applies "
+            "-- separate from the Gemini API's own free tier."
+        ),
+        "console_url": "https://console.cloud.google.com/vertex-ai",
+        "static_models": [
+            "gemini-2.0-flash-001", "gemini-2.0-flash-lite-001",
+            "gemini-1.5-flash-002", "gemini-1.5-pro-002",
+        ],
+        "extra_fields": [
+            {"field": "vertex_project_id", "label": "Google Cloud Project ID", "placeholder": "my-project-id"},
+            {"field": "vertex_location", "label": "Region", "placeholder": "us-central1"},
+        ],
+    },
 }
 
 PROVIDER_IDS = tuple(PROVIDERS)
@@ -232,6 +254,7 @@ def public_registry() -> list:
             "defaultModel": spec["default_model"],
             "keysHelp": spec["keys_help"],
             "consoleUrl": spec["console_url"],
+            "extraFields": spec.get("extra_fields", []),
         }
         for provider_id, spec in PROVIDERS.items()
     ]

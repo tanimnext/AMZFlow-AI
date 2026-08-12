@@ -83,10 +83,15 @@
 
     function llmPanelHtml(spec) {
         const datalistId = `${spec.id}_model_options`;
+        const extraFields = spec.extraFields || [];
         return `
         <div class="space-y-3">
             <label class="field"><span class="label">${escapeHtml(spec.label)} API Keys (one per line)</span>
                 <textarea id="${spec.keyField}" rows="3" class="mono" placeholder="One key per line"></textarea></label>
+            ${extraFields.length ? `<div class="grid grid-cols-${Math.min(extraFields.length, 2)} gap-3">
+                ${extraFields.map((f) => `<label class="field"><span class="label">${escapeHtml(f.label)}</span>
+                    <input type="text" id="${f.field}" placeholder="${escapeHtml(f.placeholder || "")}"></label>`).join("")}
+            </div>` : ""}
             <div class="grid ${spec.endpointField ? "grid-cols-2" : "grid-cols-1"} gap-3">
                 <label class="field"><span class="label">Model</span>
                     <input type="text" id="${spec.modelField}" list="${datalistId}" placeholder="${escapeHtml(spec.defaultModel)}">
@@ -97,7 +102,7 @@
                     <input type="text" id="${spec.endpointField}" placeholder="${escapeHtml(spec.defaultEndpoint)}"></label>` : ""}
             </div>
             <div class="flex justify-between items-center">
-                <span class="hint">${spec.consoleUrl ? `<a href="${escapeHtml(spec.consoleUrl)}" target="_blank" rel="noopener">Get an API key →</a>` : ""}</span>
+                <span class="hint">${spec.consoleUrl ? `<a href="${escapeHtml(spec.consoleUrl)}" target="_blank" rel="noopener">${extraFields.length ? "Open Google Cloud Console" : "Get an API key"} →</a>` : ""}</span>
                 <button type="button" class="btn btn-sm" data-refresh-models="${spec.id}">Refresh models</button>
             </div>
         </div>`;
@@ -110,7 +115,7 @@
         if (!spec || !panel) return;
         panel.innerHTML = llmPanelHtml(spec);
         // Restore whatever was already loaded from settings for this provider.
-        [spec.keyField, spec.modelField, spec.endpointField].filter(Boolean).forEach((field) => {
+        [spec.keyField, spec.modelField, spec.endpointField, ...(spec.extraFields || []).map((f) => f.field)].filter(Boolean).forEach((field) => {
             if (SETTINGS[field] !== undefined) {
                 const el = document.getElementById(field);
                 if (el) el.value = SETTINGS[field];
@@ -234,6 +239,12 @@
             parts.push(`<label class="field"><span class="label">${escapeHtml(spec.label)} API Key(s)</span>
                 <textarea id="${spec.keyField}" rows="2" class="mono" placeholder="One key per line"></textarea></label>`);
         }
+        if ((spec.extraFields || []).length) {
+            parts.push(`<div class="grid grid-cols-${Math.min(spec.extraFields.length, 2)} gap-3">
+                ${spec.extraFields.map((f) => `<label class="field"><span class="label">${escapeHtml(f.label)}</span>
+                    <input type="text" id="${f.field}" placeholder="${escapeHtml(f.placeholder || "")}"></label>`).join("")}
+            </div>`);
+        }
         parts.push(`<label class="field"><span class="label">Voice</span>
             <div class="flex gap-2">
                 <select id="${spec.voiceField}" class="flex-1"></select>
@@ -346,7 +357,7 @@
         const panel = $("#ttsProviderPanel");
         if (!spec || !panel) return;
         panel.innerHTML = ttsPanelHtml(spec);
-        [spec.keyField, spec.modelField].filter(Boolean).forEach((field) => {
+        [spec.keyField, spec.modelField, ...(spec.extraFields || []).map((f) => f.field)].filter(Boolean).forEach((field) => {
             if (SETTINGS[field] !== undefined) {
                 const el = document.getElementById(field);
                 if (el) el.value = SETTINGS[field];
@@ -388,6 +399,7 @@
             payload.voice = payload[spec.voiceField];
         }
         if (spec.modelField) payload[spec.modelField] = document.getElementById(spec.modelField)?.value;
+        (spec.extraFields || []).forEach((f) => { payload[f.field] = document.getElementById(f.field)?.value; });
         if (spec.supportsRate) payload.edge_rate = document.getElementById("edge_rate")?.value;
         if (spec.supportsPitch) payload.edge_pitch = document.getElementById("edge_pitch")?.value;
         if (spec.director) {
@@ -414,6 +426,7 @@
         } else {
             if (spec.keyField) payload[spec.keyField] = document.getElementById(spec.keyField)?.value;
             if (spec.modelField) payload[spec.modelField] = document.getElementById(spec.modelField)?.value;
+            (spec.extraFields || []).forEach((f) => { payload[f.field] = document.getElementById(f.field)?.value; });
             if (spec.director) {
                 ["gemini_voice_style", "gemini_voice_pace", "gemini_voice_energy", "gemini_voice_warmth",
                  "gemini_voice_accent", "gemini_voice_instruction", "gemini_pronunciations"].forEach((id) => {

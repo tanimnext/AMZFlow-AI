@@ -86,6 +86,13 @@ OPENROUTER_MODEL = "google/gemini-2.0-flash-exp:free"
 DEEPSEEK_API_KEYS = []
 DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
+# Vertex AI (Google Cloud) -- same Gemini models as the "gemini" provider,
+# but billed to a GCP project (so a fresh project's $300 free-trial credit
+# applies) via a service-account instead of a simple AI Studio API key.
+VERTEX_PROJECT_ID = ""
+VERTEX_LOCATION = "us-central1"
+VERTEX_SERVICE_ACCOUNT_JSON = ""
+VERTEX_LLM_MODEL = "gemini-2.0-flash-001"
 # Optional multi-model fallback chain. When enabled, if the primary
 # LLM_SERVICE provider's keys are all exhausted, these additional
 # "provider|model" lines (each reusing that provider's OWN already-configured
@@ -117,6 +124,8 @@ EDGE_PITCH = "+0Hz"
 # Gemini TTS reuses the same Google Generative Language API key(s) already
 # used for the LLM (GEMINI_API_KEYS below) -- no separate credential needed.
 GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
+# Vertex AI TTS model -- same voice set, billed through VERTEX_SERVICE_ACCOUNT_JSON.
+VERTEX_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 GEMINI_TTS_VOICE = "Sadaltager"
 GEMINI_VOICE_STYLE = "TRUSTED_EXPERT"
 GEMINI_VOICE_PACE = "50"
@@ -147,12 +156,12 @@ COLOR_PRODUCT_BG = "#000000"
 VAL_PRODUCT_BG_OPACITY = 0.8
 
 # 0.7 made the intro/outro background image read as nearly black-and-white
-# (a heavy black scrim on top of the actual photo) -- dropped to 0.35, which
+# (a heavy black scrim on top of the actual photo) -- dropped to 0.10, which
 # still keeps overlaid title text legible without crushing the image color.
 COLOR_INTRO_OVERLAY_BG = "#000000"
-VAL_INTRO_OVERLAY_OPACITY = 0.35
+VAL_INTRO_OVERLAY_OPACITY = 0.10
 COLOR_OUTRO_OVERLAY_BG = "#000000"
-VAL_OUTRO_OVERLAY_OPACITY = 0.35
+VAL_OUTRO_OVERLAY_OPACITY = 0.10
 
 COLOR_BLUEBAR = "#007bff"
 COLOR_RANK_BG = "#FFD700"
@@ -207,6 +216,7 @@ def load_settings_from_external():
     """Loads configuration from web_app/settings.json if it exists."""
     global LLM_SERVICE, LONGCAT_API_KEYS, LONGCAT_ENDPOINT, LONGCAT_MODEL, PARTNER_TAG
     global GEMINI_API_KEYS, GEMINI_MODEL, OPENAI_API_KEYS, OPENAI_MODEL, OPENROUTER_API_KEYS, OPENROUTER_MODEL, DEEPSEEK_API_KEYS, DEEPSEEK_MODEL, DEEPSEEK_ENDPOINT
+    global VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON, VERTEX_LLM_MODEL, VERTEX_TTS_MODEL
     global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW
     global USE_YEAR, USE_BEST, YEAR
     global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
@@ -261,6 +271,12 @@ def load_settings_from_external():
                     DEEPSEEK_API_KEYS = [k.strip() for k in dk.split('\n') if k.strip()]
                 DEEPSEEK_MODEL = s.get('deepseek_model', DEEPSEEK_MODEL)
                 DEEPSEEK_ENDPOINT = s.get('deepseek_endpoint', DEEPSEEK_ENDPOINT)
+
+                VERTEX_PROJECT_ID = s.get('vertex_project_id', VERTEX_PROJECT_ID)
+                VERTEX_LOCATION = s.get('vertex_location', VERTEX_LOCATION) or "us-central1"
+                VERTEX_SERVICE_ACCOUNT_JSON = s.get('vertex_service_account_private_key', VERTEX_SERVICE_ACCOUNT_JSON)
+                VERTEX_LLM_MODEL = s.get('vertex_llm_model', VERTEX_LLM_MODEL)
+                VERTEX_TTS_MODEL = s.get('vertex_tts_model', VERTEX_TTS_MODEL)
 
                 LLM_FALLBACK_ENABLED = s.get('llm_fallback_enabled', LLM_FALLBACK_ENABLED)
                 LLM_CHAIN_RAW = s.get('llm_chain', LLM_CHAIN_RAW)
@@ -1737,14 +1753,28 @@ def download_assets(asin, base_dir="files_created"):
 
     return downloaded_video, downloaded_images, title, features
 
-_LLM_PROVIDERS = ("gemini", "openrouter", "openai", "deepseek", "longcat")
+_LLM_PROVIDERS = ("gemini", "vertex_gemini", "openrouter", "openai", "deepseek", "longcat")
 
 
 def _provider_config(provider):
     """(api_keys, default_model, endpoint) for a provider, from the globals
-    load_settings_from_external() already populated."""
+    load_settings_from_external() already populated.
+
+    For "vertex_gemini" the single "api key" is actually a short-lived OAuth
+    access token minted from VERTEX_SERVICE_ACCOUNT_JSON, and the endpoint is
+    the full Vertex AI generateContent URL (model is baked into the URL path,
+    not passed as a separate model field like the other providers)."""
     if provider == "gemini":
         return GEMINI_API_KEYS, GEMINI_MODEL, None
+    if provider == "vertex_gemini":
+        try:
+            import vertex_auth
+            token = vertex_auth.get_access_token(VERTEX_SERVICE_ACCOUNT_JSON)
+            url = vertex_auth.generate_content_url(VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_LLM_MODEL)
+            return [token], VERTEX_LLM_MODEL, url
+        except Exception as e:
+            print(f"[WARN] Vertex AI auth failed, provider unavailable: {e}")
+            return [], VERTEX_LLM_MODEL, None
     if provider == "openrouter":
         return OPENROUTER_API_KEYS, OPENROUTER_MODEL, None
     if provider == "openai":
@@ -2270,6 +2300,10 @@ def _current_tts_config(voice=None):
         "gemini_voice_accent": GEMINI_VOICE_ACCENT,
         "gemini_voice_instruction": GEMINI_VOICE_INSTRUCTION,
         "gemini_pronunciations": GEMINI_PRONUNCIATIONS,
+        "vertex_project_id": VERTEX_PROJECT_ID,
+        "vertex_location": VERTEX_LOCATION,
+        "vertex_service_account_private_key": VERTEX_SERVICE_ACCOUNT_JSON,
+        "vertex_tts_model": VERTEX_TTS_MODEL,
     }
 
 
@@ -2666,9 +2700,16 @@ async def main_pipeline():
         # Check quota before processing
         current_count = get_current_count()
         print(f"[DEBUG] Quota Check: Current={current_count}, Limit={quota}")
-        run_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
-        base_dir = os.path.join(output_root, keyword, run_id)
-        
+        # No extra timestamp subfolder in the common case -- files land
+        # directly in output_root/keyword. Only fall back to a run_id
+        # subfolder if that keyword folder is already in use (e.g. the same
+        # keyword run twice), so a rerun can never silently clobber the
+        # previous run's output.
+        base_dir = os.path.join(output_root, keyword)
+        if os.path.isdir(base_dir):
+            run_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
+            base_dir = os.path.join(output_root, keyword, run_id)
+
         # We always check quota here, even if folder exists, to ensure we don't exceed limit
         if quota != "unlimited":
             try:
@@ -2768,7 +2809,12 @@ async def main_pipeline():
             print(f"[FATAL] No usable narration audio for ASIN(s) {silent_asins} in '{keyword}' -- skipping this keyword rather than shipping a silent video.")
             continue
 
-        human_kw = title_case(keyword.replace("_", " "))
+        # `keyword` is the filesystem-safe slug (slugify() turns spaces into
+        # hyphens for the folder name) -- de-hyphenate it back into words for
+        # anything the viewer actually sees (thumbnail, title, intro/outro,
+        # SEO metadata). Otherwise "best-cold-air-intake" showed up literally
+        # on screen and in narration instead of "Best Cold Air Intake".
+        human_kw = title_case(keyword.replace("_", " ").replace("-", " "))
         
         # --- YouTube Meta & Thumbnail Generation (Move it up to use the title) ---
         print("\n--- Generating YouTube Metadata ---")

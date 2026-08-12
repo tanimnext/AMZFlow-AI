@@ -14,6 +14,12 @@ if [ ! -x "$PYBIN" ]; then
     exit 1
 fi
 
+# Point the local dev run at the production license API (release builds get
+# this from release_config.json instead; this script runs from source, which
+# has no release_config.json, so the license page shows "not configured"
+# without this).
+export AMZFLOW_LICENSE_API_URL="${AMZFLOW_LICENSE_API_URL:-https://amzflow-license-api.tanimnext2.workers.dev}"
+
 # Run the app using the venv's own interpreter directly (not via 'activate' +
 # bare 'python3', which silently falls back to system Python if the venv is
 # broken and gives no warning).

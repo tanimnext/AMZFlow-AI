@@ -54,6 +54,17 @@ def _one_attempt(provider, prompt, api_key, model, endpoint=None, timeout=30):
                 url, headers={"Content-Type": "application/json"},
                 json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=timeout
             )
+        elif provider == "vertex_gemini":
+            # `api_key` here is a short-lived OAuth access token (minted from
+            # the service-account JSON by vertex_auth), not a static API key,
+            # and `endpoint` is already the full generateContent URL with
+            # project/location/model baked into the path.
+            if not endpoint:
+                raise LLMCallError("Vertex AI endpoint not configured", retryable=False)
+            resp = requests.post(
+                endpoint, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=timeout
+            )
         else:
             # openrouter / openai / longcat / deepseek are all OpenAI-compatible.
             ep = endpoint or OPENAI_COMPATIBLE_ENDPOINTS.get(provider)
@@ -78,7 +89,7 @@ def _one_attempt(provider, prompt, api_key, model, endpoint=None, timeout=30):
 
     if resp.status_code == 200:
         try:
-            return _parse_gemini_style(resp.json()) if provider == "gemini" else _parse_openai_style(resp.json())
+            return _parse_gemini_style(resp.json()) if provider in ("gemini", "vertex_gemini") else _parse_openai_style(resp.json())
         except (KeyError, IndexError, ValueError, TypeError) as e:
             # e.g. a safety-blocked Gemini response with no candidates -- the
             # old code let this raise as an unguarded KeyError and swallowed

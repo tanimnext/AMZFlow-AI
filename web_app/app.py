@@ -870,7 +870,7 @@ def save_settings_route():
     for key in list(data):
         if any(
             marker in key.lower()
-            for marker in ("api_key", "token", "secret", "client_id")
+            for marker in ("api_key", "token", "secret", "client_id", "private_key")
         ):
             if not isinstance(data[key], str) or not data[key].strip():
                 data.pop(key)
@@ -1382,15 +1382,31 @@ def test_llm():
 
         stored = get_settings()
 
+        def field_value(name):
+            value = data.get(name)
+            if not isinstance(value, str) or not value.strip():
+                value = stored.get(name, "")
+            return str(value or "")
+
         def keys_for(provider):
             spec = model_catalog.PROVIDERS[provider]
-            raw = data.get(spec["key_field"])
-            if not isinstance(raw, str) or not raw.strip():
-                raw = stored.get(spec["key_field"], "")
-            return [k.strip() for k in str(raw or "").split("\n") if k.strip()]
+            raw = field_value(spec["key_field"])
+            return [k.strip() for k in raw.split("\n") if k.strip()]
 
         def entry_for(provider, model=None):
             spec = model_catalog.PROVIDERS[provider]
+            chosen = model or data.get(spec["model_field"]) or stored.get(spec["model_field"])
+            model_name = (chosen or spec["default_model"]).strip()
+            if provider == "vertex_gemini":
+                import vertex_auth
+                try:
+                    token = vertex_auth.get_access_token(field_value("vertex_service_account_private_key"))
+                    url = vertex_auth.generate_content_url(
+                        field_value("vertex_project_id"), field_value("vertex_location"), model_name
+                    )
+                    return {"provider": provider, "model": model_name, "api_keys": [token], "endpoint": url}
+                except ValueError:
+                    return {"provider": provider, "model": model_name, "api_keys": [], "endpoint": None}
             endpoint = None
             if spec["endpoint_field"]:
                 endpoint = (
@@ -1398,10 +1414,9 @@ def test_llm():
                     or stored.get(spec["endpoint_field"])
                     or spec.get("default_endpoint")
                 )
-            chosen = model or data.get(spec["model_field"]) or stored.get(spec["model_field"])
             return {
                 "provider": provider,
-                "model": (chosen or spec["default_model"]).strip(),
+                "model": model_name,
                 "api_keys": keys_for(provider),
                 "endpoint": endpoint,
             }

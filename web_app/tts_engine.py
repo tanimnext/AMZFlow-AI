@@ -100,7 +100,7 @@ def cache_key(text: str, config: dict) -> str:
         "rate": config.get("edge_rate", "+0%"),
         "pitch": config.get("edge_pitch", "+0Hz"),
     }
-    if provider == "gemini":
+    if provider in ("gemini", "vertex_gemini"):
         material["director"] = normalize_gemini_tts_settings(config)
     if str(provider).startswith("custom:"):
         # Voice/model live inside the custom spec, not a fixed settings
@@ -125,6 +125,7 @@ VOICE_FIELDS = {
     "edge": "edge_voice",
     "kokoro": "kokoro_voice",
     "gemini": "gemini_tts_voice",
+    "vertex_gemini": "gemini_tts_voice",  # same Chirp3-HD voice set as "gemini"
     "elevenlabs": "elevenlabs_voice_id",
     "cartesia": "cartesia_voice_id",
     "ai33pro": "ai33pro_voice_id",
@@ -132,6 +133,7 @@ VOICE_FIELDS = {
 
 MODEL_FIELDS = {
     "gemini": "gemini_tts_model",
+    "vertex_gemini": "vertex_tts_model",
     "elevenlabs": "elevenlabs_model_id",
     "cartesia": "cartesia_model_id",
     "ai33pro": "ai33pro_model_id",
@@ -145,7 +147,7 @@ DEFAULT_MODELS = {
 
 
 def _resolve_voice(provider, config):
-    if provider == "gemini":
+    if provider in ("gemini", "vertex_gemini"):
         return normalize_gemini_tts_settings(config)["voice"]
     field = VOICE_FIELDS.get(provider)
     value = str(config.get(field) or "").strip() if field else ""
@@ -156,6 +158,8 @@ def _resolve_voice(provider, config):
 def _resolve_model(provider, config):
     if provider == "gemini":
         return normalize_gemini_tts_settings(config)["model"]
+    if provider == "vertex_gemini":
+        return str(config.get("vertex_tts_model") or "").strip() or "gemini-2.5-flash-preview-tts"
     field = MODEL_FIELDS.get(provider)
     value = str(config.get(field) or "").strip() if field else ""
     return value or DEFAULT_MODELS.get(provider, "")
@@ -314,6 +318,62 @@ def synth_gemini(text, output_path, config, ffmpeg_bin="ffmpeg"):
                 pass
 
 
+def synth_vertex_gemini(text, output_path, config, ffmpeg_bin="ffmpeg"):
+    """Same Gemini TTS voices as synth_gemini, but through Vertex AI (Google
+    Cloud project billing/service-account) instead of an AI Studio API key --
+    so usage draws on that project's $300 free-trial credit."""
+    import vertex_auth
+
+    service_account_json = config.get("vertex_service_account_private_key")
+    project_id = config.get("vertex_project_id")
+    location = config.get("vertex_location") or "us-central1"
+    try:
+        token = vertex_auth.get_access_token(service_account_json)
+        url = vertex_auth.generate_content_url(project_id, location, _resolve_model("vertex_gemini", config))
+    except ValueError as exc:
+        raise TTSError(str(exc), "vertex_gemini") from exc
+
+    voice_config = normalize_gemini_tts_settings(config)
+    prompt = build_gemini_tts_prompt(text, config)
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_config["voice"]}}
+            },
+        },
+    }
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json=body,
+        timeout=GEMINI_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise TTSError(f"Vertex AI TTS error: {resp.text[:300]}", "vertex_gemini")
+    try:
+        inline = resp.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
+        pcm_bytes = base64.b64decode(inline["data"])
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
+        raise TTSError(f"Vertex AI TTS response parse error: {exc}", "vertex_gemini") from exc
+
+    raw_path = output_path + ".pcm"
+    try:
+        with open(raw_path, "wb") as handle:
+            handle.write(pcm_bytes)
+        _run_ffmpeg(
+            [ffmpeg_bin, "-y", "-f", "s16le", "-ar", "24000", "-ac", "1",
+             "-i", raw_path, output_path]
+        )
+    finally:
+        if os.path.exists(raw_path):
+            try:
+                os.remove(raw_path)
+            except OSError:
+                pass
+
+
 def synth_ai33pro(text, output_path, config, on_progress=None):
     keys = _split_keys(config.get("ai33pro_api_key"))
     if not keys:
@@ -437,6 +497,7 @@ PROVIDERS = {
     "elevenlabs": synth_elevenlabs,
     "cartesia": synth_cartesia,
     "gemini": synth_gemini,
+    "vertex_gemini": synth_vertex_gemini,
     "ai33pro": synth_ai33pro,
 }
 
@@ -463,7 +524,7 @@ def synthesize(text, output_path, config, *, ffmpeg_bin="ffmpeg", on_progress=No
     started = time.time()
     if is_custom:
         handler(text, output_path, config)
-    elif provider == "gemini":
+    elif provider in ("gemini", "vertex_gemini"):
         handler(text, output_path, config, ffmpeg_bin=ffmpeg_bin)
     elif provider == "ai33pro":
         handler(text, output_path, config, on_progress=on_progress)
