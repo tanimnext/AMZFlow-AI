@@ -22,17 +22,33 @@ function integerCell(value: string, fallback?: number): number {
   return parsed;
 }
 
+// Column C ("MachineID(s)") holds every currently-bound device as a
+// "|"-joined list -- e.g. "uuid-one|uuid-two" -- instead of a single value,
+// so one license can be active on more than one device at a time up to
+// column K's MaxDevices (defaults to 1, same as before this feature).
+function parseMachineIds(value: string): string[] {
+  return value.split("|").map((id) => id.trim()).filter(Boolean);
+}
+
 function rowToLicense(row: unknown[], rowNumber: number): LicenseRecord {
   const email = cell(row, 1).toLowerCase();
   if (!email || !email.includes("@")) throw new Error("Invalid Google Sheets response");
   const quotaValue = cell(row, 5) || "Unlimited";
   const quota = quotaValue.toLowerCase() === "unlimited" ? "Unlimited" : integerCell(quotaValue);
   return {
-    name: cell(row, 0), email, machineId: cell(row, 2), lastLogin: cell(row, 3),
+    name: cell(row, 0), email, machineIds: parseMachineIds(cell(row, 2)), lastLogin: cell(row, 3),
     used: integerCell(cell(row, 4), 0), quota,
     expiryDate: cell(row, 6) || "Lifetime", expiryTime: cell(row, 7) || "00:00",
-    activationCodeHash: cell(row, 8), tokenVersion: integerCell(cell(row, 9), 1), rowNumber,
+    activationCodeHash: cell(row, 8), tokenVersion: integerCell(cell(row, 9), 1),
+    maxDevices: integerCell(cell(row, 10), 1) || 1, rowNumber,
   };
+}
+
+function licenseToRow(user: LicenseRecord): unknown[] {
+  return [
+    user.name, user.email, user.machineIds.join("|"), user.lastLogin, user.used, user.quota,
+    user.expiryDate, user.expiryTime, user.activationCodeHash, user.tokenVersion, user.maxDevices,
+  ];
 }
 
 export class GoogleSheetsStore implements LicenseStore {
@@ -62,7 +78,7 @@ export class GoogleSheetsStore implements LicenseStore {
   }
 
   private async readLicenses(): Promise<LicenseRecord[]> {
-    const payload = await this.request(`/values/${encodeURIComponent("Sheet1!A:J")}`);
+    const payload = await this.request(`/values/${encodeURIComponent("Sheet1!A:K")}`);
     if (typeof payload !== "object" || payload === null || !("values" in payload) || !Array.isArray(payload.values)) {
       throw new Error("Invalid Google Sheets response");
     }
@@ -82,13 +98,10 @@ export class GoogleSheetsStore implements LicenseStore {
 
   async save(user: LicenseRecord): Promise<void> {
     if (!Number.isSafeInteger(user.rowNumber) || user.rowNumber! < 2) throw new Error("Missing Google Sheet row number");
-    const values = [[
-      user.name, user.email, user.machineId, user.lastLogin, user.used, user.quota,
-      user.expiryDate, user.expiryTime, user.activationCodeHash, user.tokenVersion,
-    ]];
+    const values = [licenseToRow(user)];
     const payload = await this.request("/values:batchUpdate", {
       method: "POST",
-      body: JSON.stringify({ valueInputOption: "RAW", data: [{ range: `Sheet1!A${user.rowNumber}:J${user.rowNumber}`, values }] }),
+      body: JSON.stringify({ valueInputOption: "RAW", data: [{ range: `Sheet1!A${user.rowNumber}:K${user.rowNumber}`, values }] }),
     });
     if (typeof payload !== "object" || payload === null || !("totalUpdatedRows" in payload) || payload.totalUpdatedRows !== 1) {
       throw new Error("Invalid Google Sheets response");
@@ -101,11 +114,8 @@ export class GoogleSheetsStore implements LicenseStore {
   }
 
   async create(user: LicenseRecord): Promise<void> {
-    const values = [[
-      user.name, user.email, user.machineId, user.lastLogin, user.used, user.quota,
-      user.expiryDate, user.expiryTime, user.activationCodeHash, user.tokenVersion,
-    ]];
-    const range = encodeURIComponent("Sheet1!A:J");
+    const values = [licenseToRow(user)];
+    const range = encodeURIComponent("Sheet1!A:K");
     const payload = await this.request(`/values/${range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, {
       method: "POST", body: JSON.stringify({ values }),
     });
@@ -119,7 +129,7 @@ export class GoogleSheetsStore implements LicenseStore {
   async delete(email: string): Promise<void> {
     const user = await this.findByEmail(email);
     if (!user?.rowNumber) return;
-    const range = encodeURIComponent(`Sheet1!A${user.rowNumber}:J${user.rowNumber}`);
+    const range = encodeURIComponent(`Sheet1!A${user.rowNumber}:K${user.rowNumber}`);
     const payload = await this.request(`/values/${range}:clear`, { method: "POST", body: "{}" });
     if (typeof payload !== "object" || payload === null || !("clearedRange" in payload)) {
       throw new Error("Invalid Google Sheets response");

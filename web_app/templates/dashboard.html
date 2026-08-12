@@ -91,8 +91,10 @@
                     <tbody>
                         {% for project in recent_projects %}
                         <tr>
-                            <td class="font-semibold" style="color:var(--text)">{{ project.keyword }}</td>
-                            <td>{% if project.hasVideo %}<span class="badge badge-ok">Ready</span>{% else %}<span class="badge badge-neutral">Missing</span>{% endif %}</td>
+                            <td class="font-semibold" style="color:var(--text)">
+                                <button type="button" class="open-folder-btn" data-keyword="{{ project.keyword }}" style="color:var(--text);background:none;border:none;padding:0;cursor:pointer;text-decoration:underline;text-underline-offset:2px" title="Open folder">{{ project.keyword }}</button>
+                            </td>
+                            <td>{% if project.hasVideo %}<a href="{{ url_for('get_video', keyword=project.keyword) }}" target="_blank" rel="noopener" class="badge badge-ok" style="text-decoration:none">▶ Ready</a>{% else %}<span class="badge badge-neutral">Missing</span>{% endif %}</td>
                             <td>{% if project.hasThumbnail %}<span class="badge badge-ok">Ready</span>{% else %}<span class="badge badge-neutral">Missing</span>{% endif %}</td>
                             <td>
                                 {% if project.uploadState == 'succeeded' %}<span class="badge badge-ok">Published</span>
@@ -110,4 +112,18 @@
         </div>
     </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.querySelectorAll(".open-folder-btn").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            try {
+                await AF.api("/open_folder", { body: { keyword: btn.dataset.keyword } });
+            } catch (err) {
+                AF.toast(`Could not open folder: ${err.message}`, "error", 5000);
+            }
+        });
+    });
+</script>
 {% endblock %}

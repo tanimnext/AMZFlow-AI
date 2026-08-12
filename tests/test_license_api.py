@@ -92,6 +92,31 @@ class LicenseApiClientTests(unittest.TestCase):
         self.assertFalse(success)
         self.assertEqual(message, "The service is temporarily unavailable.")
 
+    @patch("web_app.license_store.requests.request")
+    def test_list_users_reports_every_bound_device_and_the_device_limit(self, request):
+        request.return_value = self.response(200, {"data": [{
+            "email": "user@example.com", "name": "Customer", "used": 0, "quota": "Unlimited",
+            "expiryDate": "Lifetime", "expiryTime": "00:00",
+            "machineIds": ["machine-id-123", "machine-id-456"], "maxDevices": 2,
+            "lastLogin": "2026-08-12T00:00:00Z",
+        }]})
+        with patch.object(license_store, "ADMIN_TOKEN_FILE", Path(self.temp_dir.name) / "admin.txt"):
+            license_store.ADMIN_TOKEN_FILE.write_text("a" * 40, encoding="utf-8")
+            users = license_store.list_users()
+        self.assertEqual(users[0]["machine_ids"], ["machine-id-123", "machine-id-456"])
+        self.assertEqual(users[0]["max_devices"], 2)
+
+    @patch("web_app.license_store.requests.request")
+    def test_remove_device_targets_the_specific_machine_id(self, request):
+        request.return_value = self.response(200, {"data": {"user": {}}})
+        with patch.object(license_store, "ADMIN_TOKEN_FILE", Path(self.temp_dir.name) / "admin.txt"):
+            license_store.ADMIN_TOKEN_FILE.write_text("a" * 40, encoding="utf-8")
+            success, message = license_store.remove_device("user@example.com", "machine-id-123")
+        self.assertTrue(success)
+        called_url = request.call_args.args[1]
+        self.assertIn("/remove-device", called_url)
+        self.assertEqual(request.call_args.kwargs["json"], {"machineId": "machine-id-123"})
+
 
 class ActivationRouteTests(unittest.TestCase):
     @classmethod

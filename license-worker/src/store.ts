@@ -1,7 +1,8 @@
 export interface LicenseRecord {
   name: string;
   email: string;
-  machineId: string;
+  machineIds: string[];
+  maxDevices: number;
   lastLogin: string;
   used: number;
   quota: number | "Unlimited";

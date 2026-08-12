@@ -1860,6 +1860,30 @@ def get_video(keyword):
 
     return "Not Found", 404
 
+
+@app.route('/open_folder', methods=['POST'])
+def open_folder():
+    """Reveals a project's output folder in Finder/Explorer. Only makes
+    sense because the Flask server and browser both run on the user's own
+    machine here -- this is a desktop app, not a hosted multi-tenant one."""
+    try:
+        data = require_json_object()
+        k_path = project_path(str(data.get("keyword", "")))
+    except ValueError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 400
+    if not os.path.isdir(k_path):
+        return jsonify({"success": False, "error": "Folder not found"}), 404
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", k_path], check=False)
+        elif os.name == "nt":
+            subprocess.run(["explorer", k_path], check=False)
+        else:
+            subprocess.run(["xdg-open", k_path], check=False)
+    except OSError as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+    return jsonify({"success": True})
+
 @app.route('/get_metadata')
 def get_metadata():
     keyword = request.args.get('keyword')

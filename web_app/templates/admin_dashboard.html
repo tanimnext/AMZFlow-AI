@@ -34,12 +34,13 @@
         <section class="card mb-6" aria-labelledby="add-user-heading">
             <div class="card-head"><h2 id="add-user-heading" class="card-title">Add New User</h2></div>
             <div class="card-pad">
-                <form method="POST" action="{{ url_for('add_user') }}" class="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
+                <form method="POST" action="{{ url_for('add_user') }}" class="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <label class="field" style="margin:0"><span class="label">Name</span><input name="name" placeholder="Name"></label>
                     <label class="field" style="margin:0"><span class="label">Email</span><input name="email" type="email" required placeholder="Email"></label>
                     <label class="field" style="margin:0"><span class="label">Quota</span><input name="quota" placeholder="Unlimited / 100"></label>
                     <label class="field" style="margin:0"><span class="label">Expiry</span><input name="expiry_date" placeholder="YYYY-MM-DD or Lifetime"></label>
+                    <label class="field" style="margin:0"><span class="label">Devices</span><input name="max_devices" type="number" min="1" max="20" value="1" title="How many devices this email can be active on at once"></label>
                     <button type="submit" class="btn btn-primary">Add User</button>
                 </form>
             </div>
@@ -51,7 +52,7 @@
                 <table class="data">
                     <thead>
                         <tr>
-                            <th>Name</th><th>Email</th><th>Machine ID</th><th>Used / Quota</th>
+                            <th>Name</th><th>Email</th><th>Devices</th><th>Used / Quota</th>
                             <th>Expiry</th><th>Last Login</th><th class="text-right">Actions</th>
                         </tr>
                     </thead>
@@ -60,16 +61,34 @@
                         <tr>
                             <td>{{ u.name or '—' }}</td>
                             <td style="color:var(--text-muted)">{{ u.email }}</td>
-                            <td class="mono text-[11px]" style="color:var(--text-faint)">{{ u.machine_id or 'Not bound' }}</td>
+                            <td class="text-[11px]" style="color:var(--text-faint)">
+                                {% if u.machine_ids %}
+                                    <div class="space-y-1">
+                                    {% for mid in u.machine_ids %}
+                                        <div class="flex items-center gap-1">
+                                            <span class="mono">{{ mid }}</span>
+                                            <form method="POST" action="{{ url_for('remove_device', email=u.email) }}" class="inline" onsubmit="return confirm('Sign out this device? It will need to activate again.');">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                                <input type="hidden" name="machine_id" value="{{ mid }}">
+                                                <button class="btn btn-sm" style="padding:0 6px" title="Remove this device">✕</button>
+                                            </form>
+                                        </div>
+                                    {% endfor %}
+                                    </div>
+                                {% else %}
+                                    Not bound
+                                {% endif %}
+                                <div class="mt-1">{{ u.machine_ids|length }} / {{ u.max_devices or 1 }} devices used</div>
+                            </td>
                             <td>{{ u.used or 0 }} / {{ u.quota or 'Unlimited' }}</td>
                             <td>{{ u.expiry_date or 'Lifetime' }} {{ u.expiry_time if u.expiry_date and u.expiry_date.lower() != 'lifetime' else '' }}</td>
                             <td class="text-[11px]" style="color:var(--text-faint)">{{ u.last_login or 'Never' }}</td>
                             <td>
                                 <div class="flex justify-end gap-2 flex-wrap">
                                     <button type="button" onclick="document.getElementById('edit-{{ loop.index }}').classList.toggle('hidden')" class="btn btn-sm">Edit</button>
-                                    <form method="POST" action="{{ url_for('reset_machine', email=u.email) }}" class="inline">
+                                    <form method="POST" action="{{ url_for('reset_machine', email=u.email) }}" class="inline" onsubmit="return confirm('Sign every device for {{ u.email }} out?');">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                        <button class="btn btn-sm">Unbind</button>
+                                        <button class="btn btn-sm">Unbind All</button>
                                     </form>
                                     <form method="POST" action="{{ url_for('reset_usage', email=u.email) }}" class="inline">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -90,6 +109,7 @@
                                     <label class="field" style="margin:0"><span class="label">Quota</span><input name="quota" value="{{ u.quota or 'Unlimited' }}"></label>
                                     <label class="field" style="margin:0"><span class="label">Expiry Date</span><input name="expiry_date" value="{{ u.expiry_date or 'Lifetime' }}"></label>
                                     <label class="field" style="margin:0"><span class="label">Expiry Time</span><input name="expiry_time" value="{{ u.expiry_time or '00:00' }}"></label>
+                                    <label class="field" style="margin:0"><span class="label">Devices</span><input name="max_devices" type="number" min="1" max="20" value="{{ u.max_devices or 1 }}"></label>
                                     <button type="submit" class="btn btn-ok">Save</button>
                                 </form>
                             </td>

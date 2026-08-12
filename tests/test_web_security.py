@@ -1,3 +1,4 @@
+import os
 import time
 import base64
 import tempfile
@@ -196,6 +197,36 @@ class WebSecurityTests(unittest.TestCase):
             with patch.object(self.module, "library_root", return_value=tmp):
                 response = self.client.get("/video/nonexistent-project")
         self.assertEqual(response.status_code, 404)
+
+    def test_open_folder_rejects_path_traversal(self):
+        response = self.client.post(
+            "/open_folder", json={"keyword": "../../etc"}, headers={"X-CSRF-Token": "test-csrf"},
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_open_folder_404s_for_a_missing_project(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(self.module, "library_root", return_value=tmp):
+                response = self.client.post(
+                    "/open_folder", json={"keyword": "nonexistent-project"},
+                    headers={"X-CSRF-Token": "test-csrf"},
+                )
+        self.assertEqual(response.status_code, 404)
+
+    def test_open_folder_shells_out_to_the_platform_file_manager(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = os.path.realpath(tmp)  # macOS symlinks /var -> /private/var
+            project_dir = os.path.join(tmp, "best-robot-vacuums")
+            os.makedirs(project_dir)
+            with patch.object(self.module, "library_root", return_value=tmp), \
+                 patch.object(self.module.sys, "platform", "darwin"), \
+                 patch.object(self.module, "subprocess") as subprocess_mock:
+                response = self.client.post(
+                    "/open_folder", json={"keyword": "best-robot-vacuums"},
+                    headers={"X-CSRF-Token": "test-csrf"},
+                )
+        self.assertEqual(response.status_code, 200)
+        subprocess_mock.run.assert_called_once_with(["open", project_dir], check=False)
 
     def test_content_batches_history_reports_missing_video_as_not_found(self):
         fake_job = {

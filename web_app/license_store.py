@@ -179,8 +179,10 @@ def list_users():
     try:
         users = []
         for user in payload["data"]:
+            machine_ids = user.get("machineIds")
             users.append(_license(user) | {
-                "machine_id": str(user.get("machineId", "")),
+                "machine_ids": [str(m) for m in machine_ids] if isinstance(machine_ids, list) else [],
+                "max_devices": int(user.get("maxDevices") or 1),
                 "last_login": str(user.get("lastLogin", "")),
             })
         return users
@@ -202,10 +204,11 @@ def _quota(value):
         return value
 
 
-def add_user(name, email, expiry_date="Lifetime", expiry_time="00:00", quota="Unlimited"):
+def add_user(name, email, expiry_date="Lifetime", expiry_time="00:00", quota="Unlimited", max_devices=1):
     success, payload = _admin_request("POST", "/v1/admin/users", {
         "name": str(name).strip(), "email": str(email).strip().lower(), "quota": _quota(quota),
         "expiryDate": expiry_date or "Lifetime", "expiryTime": expiry_time or "00:00",
+        "maxDevices": max(1, min(20, int(max_devices or 1))),
     })
     if not success:
         return False, payload
@@ -213,8 +216,19 @@ def add_user(name, email, expiry_date="Lifetime", expiry_time="00:00", quota="Un
 
 
 def update_user(email, **fields):
-    mapping = {"name": "name", "quota": "quota", "expiry_date": "expiryDate", "expiry_time": "expiryTime"}
-    body = {mapping[key]: (_quota(value) if key == "quota" else value) for key, value in fields.items() if key in mapping}
+    mapping = {
+        "name": "name", "quota": "quota", "expiry_date": "expiryDate", "expiry_time": "expiryTime",
+        "max_devices": "maxDevices",
+    }
+    body = {}
+    for key, value in fields.items():
+        if key not in mapping:
+            continue
+        if key == "quota":
+            value = _quota(value)
+        elif key == "max_devices":
+            value = max(1, min(20, int(value or 1)))
+        body[mapping[key]] = value
     success, payload = _admin_request("PATCH", f"/v1/admin/users/{quote(str(email).strip().lower(), safe='')}", body)
     return (True, "Updated") if success else (False, payload)
 
@@ -224,14 +238,23 @@ def delete_user(email):
     return (True, "Deleted") if success else (False, payload)
 
 
-def _admin_action(email, action, success_message):
-    success, payload = _admin_request("POST", f"/v1/admin/users/{quote(str(email).strip().lower(), safe='')}/{action}", {})
+def _admin_action(email, action, success_message, body=None):
+    success, payload = _admin_request(
+        "POST", f"/v1/admin/users/{quote(str(email).strip().lower(), safe='')}/{action}", body or {}
+    )
     return (True, success_message) if success else (False, payload)
 
 
 def reset_machine(email):
-    return _admin_action(email, "reset-machine", "Machine binding reset. They can activate again with just their email.")
+    return _admin_action(email, "reset-machine", "All devices signed out. They can activate again with just their email.")
 
 
 def reset_usage(email):
     return _admin_action(email, "reset-usage", "Usage counter reset")
+
+
+def remove_device(email, machine_id):
+    return _admin_action(
+        email, "remove-device", "Device removed. That device will need to activate again; other devices are unaffected.",
+        body={"machineId": str(machine_id).strip()},
+    )

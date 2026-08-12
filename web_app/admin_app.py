@@ -121,12 +121,13 @@ def add_user():
     quota = request.form.get('quota', '').strip() or "Unlimited"
     expiry_date = request.form.get('expiry_date', '').strip() or "Lifetime"
     expiry_time = request.form.get('expiry_time', '').strip() or "00:00"
+    max_devices = request.form.get('max_devices', '').strip() or "1"
 
     if not email:
         flash("Email is required", "error")
         return redirect(url_for('dashboard'))
 
-    success, msg = license_store.add_user(name, email, expiry_date, expiry_time, quota)
+    success, msg = license_store.add_user(name, email, expiry_date, expiry_time, quota, max_devices)
     flash(msg, "success" if success else "error")
     return redirect(url_for('dashboard'))
 
@@ -138,6 +139,7 @@ def edit_user(email):
         "quota": request.form.get('quota', '').strip() or "Unlimited",
         "expiry_date": request.form.get('expiry_date', '').strip() or "Lifetime",
         "expiry_time": request.form.get('expiry_time', '').strip() or "00:00",
+        "max_devices": request.form.get('max_devices', '').strip() or "1",
     }
     success, msg = license_store.update_user(email, **fields)
     flash(msg, "success" if success else "error")
@@ -162,6 +164,17 @@ def reset_machine(email):
 def reset_usage(email):
     success, msg = license_store.reset_usage(email)
     flash("Usage counter reset" if success else msg, "success" if success else "error")
+    return redirect(url_for('dashboard'))
+
+
+@app.route('/users/<email>/remove-device', methods=['POST'])
+def remove_device(email):
+    machine_id = request.form.get('machine_id', '').strip()
+    if not machine_id:
+        flash("machine_id is required", "error")
+        return redirect(url_for('dashboard'))
+    success, msg = license_store.remove_device(email, machine_id)
+    flash(msg, "success" if success else "error")
     return redirect(url_for('dashboard'))
 
 

@@ -16,9 +16,9 @@ class FakeStore implements LicenseStore {
   async delete(email: string) { if (this.user?.email === email) this.user = null; }
 }
 
-function fixture() {
+function fixture(maxDevices = 1) {
   return new FakeStore({
-    name: "Customer Name", email: "user@example.com", machineId: "", lastLogin: "",
+    name: "Customer Name", email: "user@example.com", machineIds: [], maxDevices, lastLogin: "",
     used: 1, quota: 5, expiryDate: "Lifetime", expiryTime: "00:00",
     activationCodeHash: "", tokenVersion: 1,
   });
@@ -48,11 +48,11 @@ test("activation binds the machine by email alone and returns a token", async ()
   const body = await response.json() as { data: { activationToken: string } };
   assert.equal(response.status, 200);
   assert.match(body.data.activationToken, /^v1\./);
-  assert.equal(store.user?.machineId, "machine-id-123");
+  assert.deepEqual(store.user?.machineIds, ["machine-id-123"]);
 });
 
-test("activation is rejected for an unknown email or an already-bound machine", async () => {
-  const store = fixture();
+test("activation is rejected for an unknown email or once the device limit is reached", async () => {
+  const store = fixture(1);
   const app = createApp({ store, signingSecret: secret });
   const unknown = await app(post("/v1/activations", {
     email: "nobody@example.com", name: "Nobody", machineId: "machine-id-123",
@@ -65,6 +65,33 @@ test("activation is rejected for an unknown email or an already-bound machine", 
   }));
   assert.equal(otherMachine.status, 401);
   assert.deepEqual(await unknown.json(), await otherMachine.json());
+});
+
+test("activation is allowed on a second device once maxDevices raises the limit", async () => {
+  const store = fixture(2);
+  const app = createApp({ store, signingSecret: secret });
+  await app(post("/v1/activations", { email: "user@example.com", name: "Customer Name", machineId: "machine-id-123" }));
+  const second = await app(post("/v1/activations", {
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-456",
+  }));
+  assert.equal(second.status, 200);
+  assert.deepEqual(store.user?.machineIds, ["machine-id-123", "machine-id-456"]);
+
+  const third = await app(post("/v1/activations", {
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-789",
+  }));
+  assert.equal(third.status, 401);
+});
+
+test("re-activating an already-bound device does not add a duplicate entry", async () => {
+  const store = fixture(1);
+  const app = createApp({ store, signingSecret: secret });
+  await app(post("/v1/activations", { email: "user@example.com", name: "Customer Name", machineId: "machine-id-123" }));
+  const again = await app(post("/v1/activations", {
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123",
+  }));
+  assert.equal(again.status, 200);
+  assert.deepEqual(store.user?.machineIds, ["machine-id-123"]);
 });
 
 test("internal failures emit safe structured diagnostics", async () => {
@@ -114,9 +141,9 @@ test("admin endpoints reject missing or incorrect bearer tokens", async () => {
   assert.equal((await app(new Request("https://license.test/v1/admin/users", { headers: { authorization: "Bearer wrong-token" } }))).status, 401);
 });
 
-test("admin list includes machine metadata but never activation hashes", async () => {
+test("admin list includes device metadata but never activation hashes", async () => {
   const store = fixture();
-  store.user!.machineId = "machine-id-123";
+  store.user!.machineIds = ["machine-id-123"];
   const adminToken = "test-admin-token-with-enough-entropy";
   const app = createApp({ store, signingSecret: secret, adminToken });
   const response = await app(new Request("https://license.test/v1/admin/users", {
@@ -124,37 +151,82 @@ test("admin list includes machine metadata but never activation hashes", async (
   }));
   const text = await response.text();
   assert.match(text, /machine-id-123/);
+  assert.match(text, /maxDevices/);
   assert.doesNotMatch(text, /activationCodeHash|test-only-signing/);
 });
 
-test("admin can create a user who can activate immediately by email", async () => {
+test("admin can create a user with a device limit who can activate immediately by email", async () => {
   const store = new FakeStore(null);
   const adminToken = "test-admin-token-with-enough-entropy";
   const app = createApp({ store, signingSecret: secret, adminToken });
   const response = await app(post("/v1/admin/users", {
     name: "New Customer", email: "new@example.com", quota: 10,
-    expiryDate: "Lifetime", expiryTime: "00:00",
+    expiryDate: "Lifetime", expiryTime: "00:00", maxDevices: 3,
   }, adminToken));
   assert.equal(response.status, 201);
   assert.equal(store.user?.tokenVersion, 1);
-  assert.equal(store.user?.machineId, "");
+  assert.deepEqual(store.user?.machineIds, []);
+  assert.equal(store.user?.maxDevices, 3);
 
   const activation = await app(post("/v1/activations", {
     email: "new@example.com", name: "New Customer", machineId: "machine-id-999",
   }));
   assert.equal(activation.status, 200);
-  assert.equal(store.user?.machineId, "machine-id-999");
+  assert.deepEqual(store.user?.machineIds, ["machine-id-999"]);
 });
 
-test("admin machine reset revokes tokens and frees the email for re-activation", async () => {
-  const store = fixture();
-  store.user!.machineId = "machine-id-123";
+test("admin user creation without maxDevices defaults to a single device", async () => {
+  const store = new FakeStore(null);
+  const adminToken = "test-admin-token-with-enough-entropy";
+  const app = createApp({ store, signingSecret: secret, adminToken });
+  await app(post("/v1/admin/users", {
+    name: "New Customer", email: "new@example.com", quota: 10,
+    expiryDate: "Lifetime", expiryTime: "00:00",
+  }, adminToken));
+  assert.equal(store.user?.maxDevices, 1);
+});
+
+test("admin machine reset clears every device and revokes tokens account-wide", async () => {
+  const store = fixture(2);
+  store.user!.machineIds = ["machine-id-123", "machine-id-456"];
   const adminToken = "test-admin-token-with-enough-entropy";
   const app = createApp({ store, signingSecret: secret, adminToken });
   const response = await app(post("/v1/admin/users/user%40example.com/reset-machine", {}, adminToken));
   assert.equal(response.status, 200);
-  assert.equal(store.user?.machineId, "");
+  assert.deepEqual(store.user?.machineIds, []);
   assert.equal(store.user?.tokenVersion, 2);
+});
+
+test("admin can remove one device without signing the other devices out", async () => {
+  const store = fixture(2);
+  const adminToken = "test-admin-token-with-enough-entropy";
+  const app = createApp({ store, signingSecret: secret, adminToken });
+  const firstActivation = await app(post("/v1/activations", {
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-123",
+  }));
+  const firstToken = ((await firstActivation.json()) as { data: { activationToken: string } }).data.activationToken;
+  const secondActivation = await app(post("/v1/activations", {
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-456",
+  }));
+  const secondToken = ((await secondActivation.json()) as { data: { activationToken: string } }).data.activationToken;
+
+  const removed = await app(post("/v1/admin/users/user%40example.com/remove-device", { machineId: "machine-id-123" }, adminToken));
+  assert.equal(removed.status, 200);
+  assert.deepEqual(store.user?.machineIds, ["machine-id-456"]);
+  assert.equal(store.user?.tokenVersion, 1, "tokenVersion must not bump -- that would sign out every device, not just the removed one");
+
+  // The removed device's own token can no longer verify...
+  const removedDeviceCheck = await app(post("/v1/licenses/verify", { machineId: "machine-id-123" }, firstToken));
+  assert.equal(removedDeviceCheck.status, 401);
+  // ...but the still-bound device's own token keeps working.
+  const remainingDeviceCheck = await app(post("/v1/licenses/verify", { machineId: "machine-id-456" }, secondToken));
+  assert.equal(remainingDeviceCheck.status, 200);
+
+  // The freed slot can now be used by a new device.
+  const reactivated = await app(post("/v1/activations", {
+    email: "user@example.com", name: "Customer Name", machineId: "machine-id-789",
+  }));
+  assert.equal(reactivated.status, 200);
 });
 
 test("admin can update, reset usage, and delete a user", async () => {
@@ -163,10 +235,11 @@ test("admin can update, reset usage, and delete a user", async () => {
   const app = createApp({ store, signingSecret: secret, adminToken });
   const patchResponse = await app(new Request("https://license.test/v1/admin/users/user%40example.com", {
     method: "PATCH", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-    body: JSON.stringify({ quota: 20 }),
+    body: JSON.stringify({ quota: 20, maxDevices: 5 }),
   }));
   assert.equal(patchResponse.status, 200);
   assert.equal(store.user?.quota, 20);
+  assert.equal(store.user?.maxDevices, 5);
   assert.equal((await app(post("/v1/admin/users/user%40example.com/reset-usage", {}, adminToken))).status, 200);
   assert.equal(store.user?.used, 0);
   const deleted = await app(new Request("https://license.test/v1/admin/users/user%40example.com", {

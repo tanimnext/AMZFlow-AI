@@ -155,13 +155,13 @@ COLOR_PRODUCT_TITLE = "#FFFFFF"
 COLOR_PRODUCT_BG = "#000000"
 VAL_PRODUCT_BG_OPACITY = 0.8
 
-# 0.7 made the intro/outro background image read as nearly black-and-white
-# (a heavy black scrim on top of the actual photo) -- dropped to 0.10, which
-# still keeps overlaid title text legible without crushing the image color.
+# 0.7 (then 0.10) made the intro/outro background image read as dimmed --
+# default is now 0 (no scrim at all, full original color). Settings ->
+# Intro/Outro -> Opacity still lets a user dial dimming back in per-project.
 COLOR_INTRO_OVERLAY_BG = "#000000"
-VAL_INTRO_OVERLAY_OPACITY = 0.10
+VAL_INTRO_OVERLAY_OPACITY = 0.0
 COLOR_OUTRO_OVERLAY_BG = "#000000"
-VAL_OUTRO_OVERLAY_OPACITY = 0.10
+VAL_OUTRO_OVERLAY_OPACITY = 0.0
 
 COLOR_BLUEBAR = "#007bff"
 COLOR_RANK_BG = "#FFD700"
@@ -2702,11 +2702,16 @@ async def main_pipeline():
         print(f"[DEBUG] Quota Check: Current={current_count}, Limit={quota}")
         # No extra timestamp subfolder in the common case -- files land
         # directly in output_root/keyword. Only fall back to a run_id
-        # subfolder if that keyword folder is already in use (e.g. the same
-        # keyword run twice), so a rerun can never silently clobber the
-        # previous run's output.
+        # subfolder if that keyword folder already has a FINISHED video in
+        # it (a true duplicate run), so a rerun can never clobber a
+        # completed video. A folder left behind by a crash/OOM/force-quit
+        # (no video.mp4 yet) is reused as-is instead -- whatever per-ASIN
+        # images/video that download_assets() already pulled down survive,
+        # so a resumed run has less to redo than starting over in a fresh
+        # timestamped folder every time.
         base_dir = os.path.join(output_root, keyword)
-        if os.path.isdir(base_dir):
+        resuming = os.path.isdir(base_dir) and not os.path.isfile(os.path.join(base_dir, "video.mp4"))
+        if os.path.isdir(base_dir) and not resuming:
             run_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.urandom(4).hex()}"
             base_dir = os.path.join(output_root, keyword, run_id)
 
@@ -2721,9 +2726,9 @@ async def main_pipeline():
                     break # Stop processing all remaining keywords
             except: pass
 
-        print(f"\n--- Keyword: {keyword} ---")
+        print(f"\n--- Keyword: {keyword} ---" + (" (resuming previous interrupted run)" if resuming else ""))
         reset_audio_stats()
-        os.makedirs(base_dir, exist_ok=False)
+        os.makedirs(base_dir, exist_ok=True)
 
         processed = []
         process_start = time.time()

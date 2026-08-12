@@ -59,8 +59,8 @@ function licenseView(user: LicenseRecord) {
 
 function adminView(user: LicenseRecord) {
   return {
-    ...licenseView(user), machineId: user.machineId, lastLogin: user.lastLogin,
-    tokenVersion: user.tokenVersion,
+    ...licenseView(user), machineIds: user.machineIds, maxDevices: user.maxDevices,
+    lastLogin: user.lastLogin, tokenVersion: user.tokenVersion,
   };
 }
 
@@ -81,7 +81,12 @@ async function authorizedUser(request: Request, machineId: string, deps: AppDepe
   try {
     const token = bearerToken(request);
     const user = await deps.store.findByEmail(readUnverifiedTokenEmail(token));
-    if (!user || !isActive(user, (deps.now ?? (() => new Date()))())) throw INVALID_LICENSE;
+    // Membership in machineIds (not just a valid token signature/tokenVersion)
+    // is what makes "remove one device" actually revoke that device: an
+    // admin can drop it from the list without bumping tokenVersion (which
+    // would sign every other device out too).
+    if (!user || !isActive(user, (deps.now ?? (() => new Date()))()) ||
+        !user.machineIds.some((id) => id.toLowerCase() === machineId.toLowerCase())) throw INVALID_LICENSE;
     await verifyActivationToken(token, machineId, user.tokenVersion, deps.signingSecret, (deps.now ?? (() => new Date()))());
     return user;
   } catch { throw INVALID_LICENSE; }
@@ -99,10 +104,14 @@ async function requireAdmin(request: Request, expected = ""): Promise<void> {
   } catch { throw new ApiError(401, "UNAUTHORIZED", "Admin authorization is required."); }
 }
 
+function isValidMaxDevices(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 20;
+}
+
 function parseNewUser(value: unknown) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
   const input = value as Record<string, unknown>;
-  const allowed = new Set(["name", "email", "quota", "expiryDate", "expiryTime"]);
+  const allowed = new Set(["name", "email", "quota", "expiryDate", "expiryTime", "maxDevices"]);
   if (Object.keys(input).some((key) => !allowed.has(key)) || typeof input.name !== "string" || typeof input.email !== "string") {
     throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
   }
@@ -111,23 +120,25 @@ function parseNewUser(value: unknown) {
   const quota = input.quota === "Unlimited" ? "Unlimited" : input.quota;
   const expiryDate = input.expiryDate ?? "Lifetime";
   const expiryTime = input.expiryTime ?? "00:00";
+  const maxDevices = input.maxDevices ?? 1;
   if (!name || name.length > 120 || !/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,63}$/.test(email) ||
       (quota !== "Unlimited" && (!Number.isSafeInteger(quota) || (quota as number) < 1)) ||
       typeof expiryDate !== "string" || typeof expiryTime !== "string" ||
-      (expiryDate !== "Lifetime" && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) || !/^\d{2}:\d{2}$/.test(expiryTime)) {
+      (expiryDate !== "Lifetime" && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) || !/^\d{2}:\d{2}$/.test(expiryTime) ||
+      !isValidMaxDevices(maxDevices)) {
     throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
   }
-  return { name, email, quota: quota as number | "Unlimited", expiryDate, expiryTime };
+  return { name, email, quota: quota as number | "Unlimited", expiryDate, expiryTime, maxDevices };
 }
 
-function parseUserPatch(value: unknown): Partial<Pick<LicenseRecord, "name" | "quota" | "expiryDate" | "expiryTime">> {
+function parseUserPatch(value: unknown): Partial<Pick<LicenseRecord, "name" | "quota" | "expiryDate" | "expiryTime" | "maxDevices">> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
   const input = value as Record<string, unknown>;
-  const allowed = new Set(["name", "quota", "expiryDate", "expiryTime"]);
+  const allowed = new Set(["name", "quota", "expiryDate", "expiryTime", "maxDevices"]);
   if (!Object.keys(input).length || Object.keys(input).some((key) => !allowed.has(key))) {
     throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
   }
-  const patch: Partial<Pick<LicenseRecord, "name" | "quota" | "expiryDate" | "expiryTime">> = {};
+  const patch: Partial<Pick<LicenseRecord, "name" | "quota" | "expiryDate" | "expiryTime" | "maxDevices">> = {};
   if (input.name !== undefined) {
     if (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 120) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
     patch.name = input.name.trim();
@@ -143,6 +154,10 @@ function parseUserPatch(value: unknown): Partial<Pick<LicenseRecord, "name" | "q
   if (input.expiryTime !== undefined) {
     if (typeof input.expiryTime !== "string" || !/^\d{2}:\d{2}$/.test(input.expiryTime)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
     patch.expiryTime = input.expiryTime;
+  }
+  if (input.maxDevices !== undefined) {
+    if (!isValidMaxDevices(input.maxDevices)) throw new ApiError(400, "INVALID_REQUEST", "Request body is invalid.");
+    patch.maxDevices = input.maxDevices;
   }
   return patch;
 }
@@ -200,8 +215,9 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
       if (pathname === "/v1/admin/users") {
         const input = parseNewUser(await readJson(request));
         if (await deps.store.findByEmail(input.email)) throw new ApiError(409, "USER_EXISTS", "A user with this email already exists.");
+        const { maxDevices, ...rest } = input;
         const user: LicenseRecord = {
-          ...input, machineId: "", lastLogin: "", used: 0, tokenVersion: 1, activationCodeHash: "",
+          ...rest, machineIds: [], maxDevices, lastLogin: "", used: 0, tokenVersion: 1, activationCodeHash: "",
         };
         await deps.store.create(user);
         return json({ data: { user: adminView(user) } }, 201);
@@ -212,8 +228,29 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
         const email = decodeURIComponent(resetMachineMatch[1]).trim().toLowerCase();
         const user = await deps.store.findByEmail(email);
         if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
-        user.machineId = "";
+        // Signs every device out (not just one) -- tokenVersion is a single
+        // shared value, so bumping it invalidates every previously issued
+        // token account-wide. Use remove-device instead to drop one device
+        // without disturbing the others.
+        user.machineIds = [];
         user.tokenVersion += 1;
+        await deps.store.save(user);
+        return json({ data: { user: adminView(user) } });
+      }
+
+      const removeDeviceMatch = pathname.match(/^\/v1\/admin\/users\/([^/]+)\/remove-device$/);
+      if (removeDeviceMatch) {
+        const email = decodeURIComponent(removeDeviceMatch[1]).trim().toLowerCase();
+        const user = await deps.store.findByEmail(email);
+        if (!user) throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+        const body = await readJson(request);
+        const machineId = typeof body === "object" && body !== null && "machineId" in body
+          ? String((body as Record<string, unknown>).machineId || "").trim().toLowerCase() : "";
+        if (!machineId) throw new ApiError(400, "INVALID_REQUEST", "machineId is required.");
+        // No tokenVersion bump: authorizedUser() re-checks machineIds
+        // membership on every request, so dropping it from the list alone
+        // is enough to revoke that one device's session immediately.
+        user.machineIds = user.machineIds.filter((id) => id.toLowerCase() !== machineId);
         await deps.store.save(user);
         return json({ data: { user: adminView(user) } });
       }
@@ -221,14 +258,15 @@ export function createApp(deps: AppDependencies): (request: Request) => Promise<
       if (pathname === "/v1/activations") {
         const input = parseActivationRequest(await readJson(request));
         const user = await deps.store.findByEmail(input.email);
-        if (!user || !isActive(user, (deps.now ?? (() => new Date()))()) ||
-            (user.machineId && user.machineId.toLowerCase() !== input.machineId.toLowerCase())) throw INVALID_ACTIVATION;
+        if (!user || !isActive(user, (deps.now ?? (() => new Date()))())) throw INVALID_ACTIVATION;
+        const alreadyBound = user.machineIds.some((id) => id.toLowerCase() === input.machineId.toLowerCase());
+        if (!alreadyBound && user.machineIds.length >= Math.max(1, user.maxDevices || 1)) throw INVALID_ACTIVATION;
         user.name ||= input.name;
-        user.machineId = input.machineId;
+        if (!alreadyBound) user.machineIds = [...user.machineIds, input.machineId];
         user.lastLogin = (deps.now ?? (() => new Date()))().toISOString();
         await deps.store.save(user);
         const activationToken = await issueActivationToken(
-          { email: user.email, machineId: user.machineId, tokenVersion: user.tokenVersion },
+          { email: user.email, machineId: input.machineId, tokenVersion: user.tokenVersion },
           deps.signingSecret,
           (deps.now ?? (() => new Date()))(),
         );
