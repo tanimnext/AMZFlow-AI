@@ -92,7 +92,7 @@ DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
 VERTEX_PROJECT_ID = ""
 VERTEX_LOCATION = "us-central1"
 VERTEX_SERVICE_ACCOUNT_JSON = ""
-VERTEX_LLM_MODEL = "gemini-2.0-flash-001"
+VERTEX_LLM_MODEL = "gemini-2.5-flash"
 # Optional multi-model fallback chain. When enabled, if the primary
 # LLM_SERVICE provider's keys are all exhausted, these additional
 # "provider|model" lines (each reusing that provider's OWN already-configured

@@ -336,7 +336,9 @@ def synth_vertex_gemini(text, output_path, config, ffmpeg_bin="ffmpeg"):
     voice_config = normalize_gemini_tts_settings(config)
     prompt = build_gemini_tts_prompt(text, config)
     body = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        # Vertex AI requires an explicit role on the content part (the AI
+        # Studio "gemini" TTS request above does not).
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
             "responseModalities": ["AUDIO"],
             "speechConfig": {

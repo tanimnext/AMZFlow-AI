@@ -63,7 +63,10 @@ def _one_attempt(provider, prompt, api_key, model, endpoint=None, timeout=30):
                 raise LLMCallError("Vertex AI endpoint not configured", retryable=False)
             resp = requests.post(
                 endpoint, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=timeout
+                # Unlike the AI Studio "gemini" endpoint above, Vertex AI
+                # rejects a content part with no explicit role ("Please use
+                # a valid role: user, model.").
+                json={"contents": [{"role": "user", "parts": [{"text": prompt}]}]}, timeout=timeout
             )
         else:
             # openrouter / openai / longcat / deepseek are all OpenAI-compatible.

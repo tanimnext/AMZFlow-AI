@@ -91,7 +91,7 @@ PROVIDERS = {
         "key_field": "vertex_service_account_private_key",
         "model_field": "vertex_llm_model",
         "endpoint_field": None,
-        "default_model": "gemini-2.0-flash-001",
+        "default_model": "gemini-2.5-flash",
         "keys_help": (
             "Paste the full service-account JSON (Google Cloud Console -> IAM & Admin "
             "-> Service Accounts -> Keys -> Add key -> JSON). Grant it the Vertex AI "
@@ -99,10 +99,7 @@ PROVIDERS = {
             "-- separate from the Gemini API's own free tier."
         ),
         "console_url": "https://console.cloud.google.com/vertex-ai",
-        "static_models": [
-            "gemini-2.0-flash-001", "gemini-2.0-flash-lite-001",
-            "gemini-1.5-flash-002", "gemini-1.5-pro-002",
-        ],
+        "static_models": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
         "extra_fields": [
             {"field": "vertex_project_id", "label": "Google Cloud Project ID", "placeholder": "my-project-id"},
             {"field": "vertex_location", "label": "Region", "placeholder": "us-central1"},
