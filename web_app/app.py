@@ -753,6 +753,16 @@ def api_browse_folders():
 def get_settings_route():
     return jsonify(public_settings(get_settings()))
 
+
+@app.route('/get_settings_full')
+def get_settings_full_route():
+    """Unredacted settings, for the Settings page only -- every other page
+    keeps using the redacted /get_settings. This app only ever listens on
+    127.0.0.1 and every route already requires the local activation session,
+    so this doesn't cross a trust boundary; it exists so a saved API key
+    shows back up in its field instead of looking like it never saved."""
+    return jsonify(get_settings())
+
 @app.route('/save_settings', methods=['POST'])
 def save_settings_route():
     try:

@@ -131,6 +131,19 @@ class WebSecurityTests(unittest.TestCase):
         ]
         self.assertEqual(sensitive, [])
 
+    def test_get_settings_full_returns_the_saved_api_key_for_the_settings_page(self):
+        # /get_settings (used by every other page) redacts secrets so a
+        # saved key never round-trips into the DOM/network tab of a page
+        # that doesn't need it. The Settings page itself is the one place a
+        # saved key must show back up in its own field -- otherwise it looks
+        # like saving silently failed every time the page reloads.
+        with patch.object(self.module, "get_settings", return_value={"gemini_api_key": "secret-key-123", "logo_text": "Test"}):
+            response = self.client.get("/get_settings_full")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["gemini_api_key"], "secret-key-123")
+        self.assertEqual(payload["logo_text"], "Test")
+
     def test_save_settings_accepts_llm_fallback_and_gemini_tts_fields(self):
         with patch.object(self.module, "save_settings") as save_settings:
             response = self.client.post(

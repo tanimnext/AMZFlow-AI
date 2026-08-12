@@ -28,7 +28,10 @@
     }
 
     async function loadSettings() {
-        SETTINGS = await api("/get_settings");
+        // Unredacted (unlike /get_settings, which every other page uses) --
+        // this is the one page a saved API key/credential needs to show
+        // back up in its own field instead of looking like it never saved.
+        SETTINGS = await api("/get_settings_full");
         for (const key in SETTINGS) {
             const el = document.getElementById(key);
             if (!el) continue;
