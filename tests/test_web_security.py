@@ -1,4 +1,7 @@
+import json
 import os
+import pathlib
+import re
 import time
 import base64
 import tempfile
@@ -367,6 +370,32 @@ class WebSecurityTests(unittest.TestCase):
         )
         self.assertTrue(run_ffmpeg.called)
         self.assertIn(job["status"], {"running", "done"})
+
+    def test_fallback_chain_textareas_are_actually_submitted_on_save(self):
+        # collectSettings() in settings_page.js skips every element carrying
+        # data-setting="false" (a marker for UI-only proxies like
+        # #voice_select). Both chain textareas were tagged with it, so the
+        # user's drag-ordered fallback order was silently dropped from every
+        # save payload -- the toggle beside it persisted, the order never
+        # did, which reads as "the chain resets itself".
+        page = self.client.get("/settings").data.decode()
+        for field in ("llm_chain", "tts_chain"):
+            match = re.search(rf'<textarea id="{field}"[^>]*>', page)
+            self.assertIsNotNone(match, f"#{field} textarea missing from settings page")
+            self.assertNotIn(
+                'data-setting="false"',
+                match.group(0),
+                f"#{field} is excluded from collectSettings() and will never be saved",
+            )
+
+    def test_settings_template_defines_both_fallback_chain_keys(self):
+        # Server-side allow-list is derived from the shipped template, so a
+        # chain key missing there is rejected as an "Unknown setting".
+        settings_template = json.loads(
+            (pathlib.Path(self.module.BASE_DIR) / "settings.json").read_text(encoding="utf-8")
+        )
+        for key in ("llm_chain", "tts_chain", "llm_fallback_enabled", "tts_fallback_enabled"):
+            self.assertIn(key, settings_template)
 
     def test_security_headers_are_present(self):
         response = self.client.get("/get_settings")

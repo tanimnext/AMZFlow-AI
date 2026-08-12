@@ -132,6 +132,44 @@
 
     /* --------------------------------------------------- fallback chain UI --- */
 
+    // Drag handle markup shared by both fallback-chain row types below.
+    const DRAG_HANDLE_HTML = `<span class="chain-drag-handle" draggable="true" title="Drag to reorder" style="cursor:grab;color:var(--text-faint);touch-action:none"><svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><circle cx="8" cy="6" r="1.5"/><circle cx="8" cy="12" r="1.5"/><circle cx="8" cy="18" r="1.5"/><circle cx="16" cy="6" r="1.5"/><circle cx="16" cy="12" r="1.5"/><circle cx="16" cy="18" r="1.5"/></svg></span>`;
+
+    // Native HTML5 drag-and-drop reordering, shared by the LLM and TTS
+    // fallback-chain row lists: drag the handle, drop on another row to
+    // move it there. `onReorder(rows)` re-renders (and re-serializes) with
+    // the new order.
+    function makeChainRowsDraggable(container, rowSelector, rows, onReorder) {
+        let dragIndex = null;
+        container.querySelectorAll(rowSelector).forEach((rowEl) => {
+            const handle = rowEl.querySelector(".chain-drag-handle");
+            if (!handle) return;
+            handle.addEventListener("dragstart", (e) => {
+                dragIndex = Number(rowEl.dataset.index);
+                e.dataTransfer.effectAllowed = "move";
+                rowEl.classList.add("dragging");
+                rowEl.style.opacity = "0.5";
+            });
+            handle.addEventListener("dragend", () => {
+                rowEl.classList.remove("dragging");
+                rowEl.style.opacity = "";
+            });
+            rowEl.addEventListener("dragover", (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+            });
+            rowEl.addEventListener("drop", (e) => {
+                e.preventDefault();
+                const dropIndex = Number(rowEl.dataset.index);
+                if (dragIndex === null || dragIndex === dropIndex) return;
+                const [moved] = rows.splice(dragIndex, 1);
+                rows.splice(dropIndex, 0, moved);
+                dragIndex = null;
+                onReorder(rows);
+            });
+        });
+    }
+
     function parseChain(text) {
         return String(text || "")
             .split("\n")
@@ -159,6 +197,7 @@
             .map(
                 (row, index) => `
             <div class="flex gap-2 items-center chain-row" data-index="${index}">
+                ${DRAG_HANDLE_HTML}
                 <select class="chain-provider" style="max-width:180px">
                     ${LLM_REGISTRY.map((p) => `<option value="${p.id}" ${p.id === row.provider ? "selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}
                 </select>
@@ -177,6 +216,7 @@
                 syncChainHidden(rows);
             });
         });
+        makeChainRowsDraggable(box, ".chain-row", rows, renderChainRows);
         syncChainHidden(rows);
     }
 
@@ -188,6 +228,69 @@
         $("#llmChainAddBtn")?.addEventListener("click", () => {
             rows.push({ provider: LLM_REGISTRY[0]?.id || "", model: "" });
             renderChainRows(rows);
+        });
+    }
+
+    /* ----------------------------------------------- TTS fallback chain UI --- */
+    // Same drag-to-reorder pattern as the LLM chain above, but each row is
+    // just a provider id (no per-row model override -- a fallback attempt
+    // always uses that provider's own configured voice/model, see
+    // _build_tts_chain() / _tts_provider_once() on the Python side).
+
+    function parseTtsChain(text) {
+        return String(text || "")
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+    }
+
+    function serializeTtsChain(rows) {
+        return rows.filter(Boolean).join("\n");
+    }
+
+    function syncTtsChainHidden(rows) {
+        const hidden = $("#tts_chain");
+        if (hidden) hidden.value = serializeTtsChain(rows);
+    }
+
+    function renderTtsChainRows(rows) {
+        const box = $("#ttsChainRows");
+        if (!box) return;
+        const options = TTS_REGISTRY.filter((p) => !p.custom);
+        box.innerHTML = rows
+            .map(
+                (provider, index) => `
+            <div class="flex gap-2 items-center chain-row" data-index="${index}">
+                ${DRAG_HANDLE_HTML}
+                <select class="chain-provider flex-1">
+                    ${options.map((p) => `<option value="${p.id}" ${p.id === provider ? "selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}
+                </select>
+                <button type="button" class="btn btn-icon btn-ghost chain-remove" aria-label="Remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/></svg></button>
+            </div>`
+            )
+            .join("");
+        box.querySelectorAll(".chain-row").forEach((rowEl) => {
+            const index = Number(rowEl.dataset.index);
+            rowEl.querySelector(".chain-provider").addEventListener("change", (e) => { rows[index] = e.target.value; syncTtsChainHidden(rows); });
+            rowEl.querySelector(".chain-remove").addEventListener("click", () => {
+                rows.splice(index, 1);
+                renderTtsChainRows(rows);
+                syncTtsChainHidden(rows);
+            });
+        });
+        makeChainRowsDraggable(box, ".chain-row", rows, renderTtsChainRows);
+        syncTtsChainHidden(rows);
+    }
+
+    function initTtsChainBuilder() {
+        const hidden = $("#tts_chain");
+        if (!hidden) return;
+        const rows = parseTtsChain(hidden.value || SETTINGS.tts_chain);
+        renderTtsChainRows(rows);
+        $("#ttsChainAddBtn")?.addEventListener("click", () => {
+            const options = TTS_REGISTRY.filter((p) => !p.custom);
+            rows.push(options[0]?.id || "edge");
+            renderTtsChainRows(rows);
         });
     }
 
@@ -774,6 +877,7 @@
         if (SETTINGS.tts_service) ttsSelect.value = SETTINGS.tts_service;
         ttsSelect.addEventListener("change", renderTtsPanel);
         await renderTtsPanel();
+        initTtsChainBuilder();
 
         PARTNER_TAGS = window.__AF_PARTNER_TAGS || [];
         renderPartnerTagRows();

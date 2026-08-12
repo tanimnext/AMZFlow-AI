@@ -115,6 +115,9 @@ ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
 CARTESIA_API_KEY = ""
 CARTESIA_VOICE_ID = "a0e9987c-56f7-4141-9fa0-81932f79c20b"
 CARTESIA_MODEL_ID = "sonic-english"
+DEEPGRAM_API_KEY = ""
+DEEPGRAM_VOICE_ID = "aura-2-thalia-en"
+GOOGLE_TTS_VOICE_ID = "en-US-Chirp3-HD-Sulafat"
 # AndrewMultilingualNeural sounds noticeably more natural than the plain
 # (non-multilingual) neural voices, and a neutral rate/pitch avoids the
 # robotic resampling artifact a pitch shift introduces on neural TTS output.
@@ -136,6 +139,12 @@ GEMINI_VOICE_INSTRUCTION = ""
 GEMINI_PRONUNCIATIONS = ""
 # Kokoro is a free, local, offline TTS model (no API key, no network call).
 KOKORO_VOICE = "af_heart"
+# Optional user-ordered TTS fallback chain (Settings -> Voice -> Fallback
+# Chain), one provider id per line -- mirrors LLM_FALLBACK_ENABLED/
+# LLM_CHAIN_RAW. Edge TTS is always appended as the final safety net
+# regardless of this list (free, no key, effectively never unavailable).
+TTS_FALLBACK_ENABLED = False
+TTS_CHAIN_RAW = ""
 
 # Branding/Visual Defaults (Can be overridden via settings.json)
 LOGO_TEXT = "Top Picks"
@@ -219,11 +228,12 @@ def load_settings_from_external():
     global VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON, VERTEX_LLM_MODEL, VERTEX_TTS_MODEL
     global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW
     global USE_YEAR, USE_BEST, YEAR
-    global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
+    global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, DEEPGRAM_API_KEY, DEEPGRAM_VOICE_ID, GOOGLE_TTS_VOICE_ID, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
     global GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, GEMINI_VOICE_STYLE
     global GEMINI_VOICE_PACE, GEMINI_VOICE_ENERGY, GEMINI_VOICE_WARMTH
     global GEMINI_VOICE_ACCENT, GEMINI_VOICE_INSTRUCTION, GEMINI_PRONUNCIATIONS
     global KOKORO_VOICE
+    global TTS_FALLBACK_ENABLED, TTS_CHAIN_RAW
     global LOGO_TEXT, INTRO_TEXT, OUTRO_TEXT, COLOR_INTRO_TITLE, COLOR_INTRO_BG, VAL_INTRO_BG_OPACITY, ENABLE_INTRO_BG, COLOR_OUTRO_TITLE, COLOR_OUTRO_BG, VAL_OUTRO_BG_OPACITY, ENABLE_OUTRO_BG, COLOR_PRODUCT_TITLE
     global COLOR_PRODUCT_BG, VAL_PRODUCT_BG_OPACITY
     global COLOR_INTRO_OVERLAY_BG, VAL_INTRO_OVERLAY_OPACITY, COLOR_OUTRO_OVERLAY_BG, VAL_OUTRO_OVERLAY_OPACITY, COLOR_BLUEBAR, COLOR_RANK_BG
@@ -297,6 +307,9 @@ def load_settings_from_external():
                 CARTESIA_API_KEY = s.get('cartesia_api_key', CARTESIA_API_KEY)
                 CARTESIA_VOICE_ID = s.get('cartesia_voice_id', CARTESIA_VOICE_ID)
                 CARTESIA_MODEL_ID = s.get('cartesia_model_id', CARTESIA_MODEL_ID)
+                DEEPGRAM_API_KEY = s.get('deepgram_api_key', DEEPGRAM_API_KEY)
+                DEEPGRAM_VOICE_ID = s.get('deepgram_voice_id', DEEPGRAM_VOICE_ID)
+                GOOGLE_TTS_VOICE_ID = s.get('google_tts_voice_id', GOOGLE_TTS_VOICE_ID)
                 EDGE_VOICE = s.get('edge_voice', EDGE_VOICE)
                 EDGE_RATE = s.get('edge_rate', EDGE_RATE)
                 EDGE_PITCH = s.get('edge_pitch', EDGE_PITCH)
@@ -310,6 +323,8 @@ def load_settings_from_external():
                 GEMINI_VOICE_INSTRUCTION = s.get('gemini_voice_instruction', GEMINI_VOICE_INSTRUCTION)
                 GEMINI_PRONUNCIATIONS = s.get('gemini_pronunciations', GEMINI_PRONUNCIATIONS)
                 KOKORO_VOICE = s.get('kokoro_voice', KOKORO_VOICE)
+                TTS_FALLBACK_ENABLED = s.get('tts_fallback_enabled', TTS_FALLBACK_ENABLED)
+                TTS_CHAIN_RAW = s.get('tts_chain', TTS_CHAIN_RAW)
 
                 LOGO_TEXT = s.get('logo_text', LOGO_TEXT)
                 INTRO_TEXT = s.get('intro_text', INTRO_TEXT)
@@ -1806,6 +1821,14 @@ def _provider_config(provider):
     if provider == "gemini":
         return GEMINI_API_KEYS, GEMINI_MODEL, None
     if provider == "vertex_gemini":
+        # Nothing saved at all -> Vertex simply isn't one of this user's
+        # providers. Staying silent here matters: this runs for every entry
+        # of the automatic fallback scan on every LLM call, so warning
+        # unconditionally printed "Vertex AI auth failed" several times per
+        # keyword at users who had never opened the Google Cloud section,
+        # making an unrelated failure look like a Vertex problem.
+        if not VERTEX_SERVICE_ACCOUNT_JSON and not VERTEX_PROJECT_ID:
+            return [], VERTEX_LLM_MODEL, None
         try:
             import vertex_auth
             token = vertex_auth.get_access_token(VERTEX_SERVICE_ACCOUNT_JSON)
@@ -2338,6 +2361,9 @@ def _current_tts_config(voice=None):
         "ai33pro_api_key": AI33PRO_API_KEY,
         "ai33pro_voice_id": AI33PRO_VOICE_ID,
         "ai33pro_model_id": AI33PRO_MODEL_ID,
+        "deepgram_api_key": DEEPGRAM_API_KEY,
+        "deepgram_voice_id": DEEPGRAM_VOICE_ID,
+        "google_tts_voice_id": GOOGLE_TTS_VOICE_ID,
         # Gemini TTS rotates through every configured key (matching the LLM
         # path); v6 used GEMINI_API_KEYS[0] only, so a rate-limited first key
         # failed the whole render with the rest of the keys sitting unused.
@@ -2358,48 +2384,122 @@ def _current_tts_config(voice=None):
     }
 
 
+_TTS_PROVIDERS = ("edge", "kokoro", "gemini", "vertex_gemini", "elevenlabs", "cartesia", "ai33pro", "deepgram", "google_cloud_tts")
+# Providers that need an actual saved credential -- edge/kokoro are
+# deliberately excluded here (see _build_tts_chain): they always report
+# "has credentials" (neither needs one), so including them in the
+# auto-fallback scan would auto-insert them ahead of a paid provider the
+# user actually configured, and Edge is already guaranteed as the final
+# entry regardless.
+_TTS_CREDENTIALED_PROVIDERS = ("gemini", "vertex_gemini", "elevenlabs", "cartesia", "ai33pro", "deepgram", "google_cloud_tts")
+
+
+def _tts_provider_has_credentials(provider):
+    """Whether `provider` is actually usable right now -- mirrors
+    _provider_config's `if keys:` gate on the LLM side, so the automatic
+    fallback below never wastes an attempt on a provider with nothing
+    configured."""
+    if provider in ("edge", "kokoro"):
+        return True  # no key/credential needed
+    if provider == "gemini":
+        return bool(GEMINI_API_KEYS)
+    if provider == "vertex_gemini":
+        return bool(VERTEX_SERVICE_ACCOUNT_JSON and VERTEX_PROJECT_ID)
+    if provider == "elevenlabs":
+        return bool(ELEVENLABS_API_KEY)
+    if provider == "cartesia":
+        return bool(CARTESIA_API_KEY)
+    if provider == "ai33pro":
+        return bool(AI33PRO_API_KEY)
+    if provider == "deepgram":
+        return bool(DEEPGRAM_API_KEY)
+    if provider == "google_cloud_tts":
+        return bool(VERTEX_SERVICE_ACCOUNT_JSON and VERTEX_PROJECT_ID)
+    return False
+
+
+def _build_tts_chain():
+    """Primary provider (TTS_SERVICE) first, then:
+    1. If opted in via TTS_FALLBACK_ENABLED, the user's own drag-ordered
+       TTS_CHAIN_RAW (one provider id per line -- see the Settings UI).
+    2. Automatically, every other CREDENTIALED provider that already has a
+       saved key, in _TTS_CREDENTIALED_PROVIDERS order (edge/kokoro need no
+       key, so they are not auto-inserted here -- see step 3).
+    3. Edge TTS is always the final entry regardless of the above -- free,
+       no key, and about as close to "always available" as an HTTP call
+       gets, so a voice segment is never fully blocked."""
+    primary = TTS_SERVICE if TTS_SERVICE in _TTS_PROVIDERS else "edge"
+    seen = {primary}
+    chain = [primary]
+
+    if TTS_FALLBACK_ENABLED and TTS_CHAIN_RAW:
+        for line in TTS_CHAIN_RAW.split('\n'):
+            prov = line.strip()
+            if prov and prov not in seen and prov in _TTS_PROVIDERS:
+                seen.add(prov)
+                chain.append(prov)
+
+    for prov in _TTS_CREDENTIALED_PROVIDERS:
+        if prov not in seen and _tts_provider_has_credentials(prov):
+            seen.add(prov)
+            chain.append(prov)
+
+    if "edge" not in seen:
+        chain.append("edge")
+    return chain
+
+
 async def _tts_provider_once(text, output_path, voice=None):
-    """One raw attempt against the configured provider.
+    """Tries _build_tts_chain() in order, returning on the first provider
+    that produces output. `voice` (a per-call override, e.g. a rank-slide
+    voice pick) only applies to the PRIMARY provider -- a voice id from one
+    provider's catalog is meaningless to a different provider's, so a
+    fallback attempt uses that provider's own configured default voice
+    instead.
 
-    HTTP-based providers (edge/elevenlabs/cartesia/gemini/ai33pro) delegate to
-    web_app/tts_engine.py -- the same module the /preview_tts route uses --
-    so there is exactly one implementation of "how to talk to provider X"
-    instead of two that can silently drift apart. Kokoro is the one exception:
-    this process (launched as __main__ by the SSE render route) owns the only
-    warm Kokoro pipeline, so it always uses the local _kokoro_synthesize
-    directly rather than routing through tts_engine, which would re-import
-    this file under a second module identity (__main__ vs amazon_video_maker)
-    and end up with two unsynchronized pipeline locks.
+    HTTP-based providers (edge/elevenlabs/cartesia/gemini/vertex_gemini/
+    ai33pro/deepgram/google_cloud_tts) delegate to web_app/tts_engine.py -- the same module the
+    /preview_tts route uses -- so there is exactly one implementation of
+    "how to talk to provider X" instead of two that can silently drift
+    apart. Kokoro is the one exception: this process (launched as __main__
+    by the SSE render route) owns the only warm Kokoro pipeline, so it
+    always uses the local _kokoro_synthesize directly rather than routing
+    through tts_engine, which would re-import this file under a second
+    module identity (__main__ vs amazon_video_maker) and end up with two
+    unsynchronized pipeline locks.
 
-    Any provider failure falls back to Edge TTS, matching the previous
-    per-provider behaviour. Exceptions propagate to the retry wrapper
-    (_tts_with_retry).
+    Raises the last provider's exception if every entry in the chain fails
+    (Edge, always the final entry, would have to itself be unreachable).
     """
-    if TTS_SERVICE == "kokoro":
-        v_id = voice or KOKORO_VOICE
+    chain = _build_tts_chain()
+    last_err = None
+    for i, provider in enumerate(chain):
+        is_primary = provider == chain[0]
         try:
-            await asyncio.get_running_loop().run_in_executor(
-                None, _kokoro_synthesize, text, output_path, v_id
-            )
+            if provider == "kokoro":
+                v_id = (voice if is_primary else None) or KOKORO_VOICE
+                await asyncio.get_running_loop().run_in_executor(
+                    None, _kokoro_synthesize, text, output_path, v_id
+                )
+            elif provider == "edge":
+                communicate = edge_tts.Communicate(
+                    text, EDGE_VOICE, rate=EDGE_RATE, pitch=EDGE_PITCH
+                )
+                await communicate.save(output_path)
+            else:
+                config = _current_tts_config(voice if is_primary else None)
+                config["service"] = provider
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda c=config: tts_engine.synthesize(text, output_path, c, ffmpeg_bin=FFMPEG_BIN)
+                )
+            return
         except Exception as e:
-            print(f"Kokoro TTS Error: {e}")
-            print("[FALLBACK] Switching to Edge TTS for this segment...")
-            communicate = edge_tts.Communicate(text, EDGE_VOICE, rate=EDGE_RATE, pitch=EDGE_PITCH)
-            await communicate.save(output_path)
-        return
-
-    config = _current_tts_config(voice)
-    try:
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: tts_engine.synthesize(text, output_path, config, ffmpeg_bin=FFMPEG_BIN)
-        )
-    except tts_engine.TTSError as e:
-        if TTS_SERVICE == "edge":
-            raise
-        print(f"{TTS_SERVICE} TTS Error: {e}")
-        print("[FALLBACK] Switching to Edge TTS for this segment...")
-        communicate = edge_tts.Communicate(text, EDGE_VOICE, rate=EDGE_RATE, pitch=EDGE_PITCH)
-        await communicate.save(output_path)
+            last_err = e
+            if i < len(chain) - 1:
+                print(f"{provider} TTS Error: {e}")
+                print(f"[FALLBACK] Switching to {chain[i + 1]} TTS for this segment...")
+            continue
+    raise last_err or RuntimeError("No TTS provider available")
 
 
 async def _tts_with_retry(text, output_path, voice, label, attempts=4):

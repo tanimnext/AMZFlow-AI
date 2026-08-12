@@ -30,6 +30,11 @@ DEEPSEEK_API_KEYS = []
 DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
 
+VERTEX_PROJECT_ID = ""
+VERTEX_LOCATION = "us-central1"
+VERTEX_SERVICE_ACCOUNT_JSON = ""
+VERTEX_LLM_MODEL = "gemini-2.5-flash"
+
 LLM_FALLBACK_ENABLED = False
 LLM_CHAIN_RAW = ""
 
@@ -49,6 +54,7 @@ YOUTUBE_API_KEY = ""
 def load_settings():
     global LONGCAT_API_KEYS, LONGCAT_ENDPOINT, LONGCAT_MODEL, USE_YEAR, USE_BEST, YEAR
     global LLM_SERVICE, GEMINI_API_KEYS, GEMINI_MODEL, OPENROUTER_API_KEYS, OPENROUTER_MODEL, OPENAI_API_KEYS, OPENAI_MODEL, DEEPSEEK_API_KEYS, DEEPSEEK_MODEL, DEEPSEEK_ENDPOINT
+    global VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON, VERTEX_LLM_MODEL
     global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW
     global SHOW_AFFILIATE, SHOW_DESCRIPTION, SHOW_KEYWORDS, SHOW_HASHTAGS, SHOW_DISCLAIMER, WEBSITE_URL, CHANNEL_URL, YOUTUBE_API_KEY
     
@@ -85,6 +91,11 @@ def load_settings():
                     DEEPSEEK_API_KEYS = [k.strip() for k in dk.split('\n') if k.strip()]
                 DEEPSEEK_MODEL = s.get('deepseek_model', DEEPSEEK_MODEL)
                 DEEPSEEK_ENDPOINT = s.get('deepseek_endpoint', DEEPSEEK_ENDPOINT)
+
+                VERTEX_PROJECT_ID = s.get('vertex_project_id', VERTEX_PROJECT_ID)
+                VERTEX_LOCATION = s.get('vertex_location', VERTEX_LOCATION) or "us-central1"
+                VERTEX_SERVICE_ACCOUNT_JSON = s.get('vertex_service_account_private_key', VERTEX_SERVICE_ACCOUNT_JSON)
+                VERTEX_LLM_MODEL = s.get('vertex_llm_model', VERTEX_LLM_MODEL)
 
                 LLM_FALLBACK_ENABLED = s.get('llm_fallback_enabled', LLM_FALLBACK_ENABLED)
                 LLM_CHAIN_RAW = s.get('llm_chain', LLM_CHAIN_RAW)
@@ -167,12 +178,25 @@ def get_related_videos(channel_url, keyword):
         print(f"Error fetching related videos: {e}")
         return []
 
-_LLM_PROVIDERS = ("gemini", "openrouter", "openai", "deepseek", "longcat")
+_LLM_PROVIDERS = ("gemini", "vertex_gemini", "openrouter", "openai", "deepseek", "longcat")
 
 
 def _provider_config(provider):
     if provider == "gemini":
         return GEMINI_API_KEYS, GEMINI_MODEL, None
+    if provider == "vertex_gemini":
+        # See the matching comment in amazon_video_maker._provider_config:
+        # silence is correct when Vertex was never configured at all.
+        if not VERTEX_SERVICE_ACCOUNT_JSON and not VERTEX_PROJECT_ID:
+            return [], VERTEX_LLM_MODEL, None
+        try:
+            import vertex_auth
+            token = vertex_auth.get_access_token(VERTEX_SERVICE_ACCOUNT_JSON)
+            url = vertex_auth.generate_content_url(VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_LLM_MODEL)
+            return [token], VERTEX_LLM_MODEL, url
+        except Exception as e:
+            print(f"[WARN] Vertex AI auth failed, provider unavailable: {e}")
+            return [], VERTEX_LLM_MODEL, None
     if provider == "openrouter":
         return OPENROUTER_API_KEYS, OPENROUTER_MODEL, None
     if provider == "openai":
@@ -188,7 +212,11 @@ def _build_llm_chain():
     """Same chain-building logic as amazon_video_maker.py's _build_llm_chain
     -- duplicated here only because these are two separate OS processes
     (this module has no import-time dependency on that one), not because
-    the LOGIC is duplicated; both call into the same llm_client.call_chain."""
+    the LOGIC is duplicated; both call into the same llm_client.call_chain.
+    Primary provider first, then the manual chain (if opted in), then --
+    same as the video pipeline -- every OTHER provider that already has a
+    saved key/credential, automatically, so metadata generation doesn't
+    fall back to Longcat specifically just because it's first in the tuple."""
     primary = LLM_SERVICE if LLM_SERVICE in _LLM_PROVIDERS else "longcat"
     seen = {primary}
     keys, model, endpoint = _provider_config(primary)
@@ -207,6 +235,14 @@ def _build_llm_chain():
             seen.add(prov)
             keys, default_model, endpoint = _provider_config(prov)
             chain.append({"provider": prov, "model": mdl or default_model, "api_keys": keys, "endpoint": endpoint})
+
+    for prov in _LLM_PROVIDERS:
+        if prov in seen:
+            continue
+        seen.add(prov)
+        keys, default_model, endpoint = _provider_config(prov)
+        if keys:
+            chain.append({"provider": prov, "model": default_model, "api_keys": keys, "endpoint": endpoint})
     return chain
 
 

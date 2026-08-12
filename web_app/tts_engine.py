@@ -123,6 +123,8 @@ DEFAULT_VOICES = {
     "elevenlabs": "pNInz6obpgnuMvYJZZ7t",
     "cartesia": "a0e9987c-56f7-4141-9fa0-81932f79c20b",
     "ai33pro": "Xb7hH8MSUJpSbSDYk0k2",
+    "deepgram": "aura-2-thalia-en",
+    "google_cloud_tts": "en-US-Chirp3-HD-Sulafat",
 }
 
 VOICE_FIELDS = {
@@ -133,6 +135,8 @@ VOICE_FIELDS = {
     "elevenlabs": "elevenlabs_voice_id",
     "cartesia": "cartesia_voice_id",
     "ai33pro": "ai33pro_voice_id",
+    "deepgram": "deepgram_voice_id",
+    "google_cloud_tts": "google_tts_voice_id",
 }
 
 MODEL_FIELDS = {
@@ -262,6 +266,88 @@ def synth_cartesia(text, output_path, config):
     raise TTSError(f"Cartesia error: {last}", "cartesia")
 
 
+def synth_google_cloud_tts(text, output_path, config):
+    """Google Cloud Text-to-Speech (Chirp3-HD / WaveNet / Standard voices) --
+    a different API from "Gemini TTS via Google Cloud" above
+    (texttospeech.googleapis.com's text:synthesize, not generateContent),
+    but authenticated and billed through the same Vertex AI service-account
+    JSON already configured under AI Provider -> Google Cloud, so no
+    separate key field is needed."""
+    import vertex_auth
+
+    service_account_json = config.get("vertex_service_account_private_key")
+    project_id = config.get("vertex_project_id")
+    try:
+        token = vertex_auth.get_access_token(service_account_json)
+    except ValueError as exc:
+        raise TTSError(str(exc), "google_cloud_tts") from exc
+    if not project_id:
+        raise TTSError(
+            "No Vertex AI project ID configured (Settings -> AI Provider -> Google Cloud)",
+            "google_cloud_tts",
+        )
+
+    voice_name = _resolve_voice("google_cloud_tts", config)
+    language_code = "-".join(voice_name.split("-")[:2]) or "en-US"
+    resp = requests.post(
+        "https://texttospeech.googleapis.com/v1/text:synthesize",
+        headers={
+            "Authorization": f"Bearer {token}",
+            # Required when calling with an OAuth access token instead of an
+            # API key -- otherwise Google can't tell which project's quota/
+            # billing to charge the request against.
+            "X-Goog-User-Project": str(project_id),
+            "Content-Type": "application/json",
+        },
+        json={
+            "input": {"text": text},
+            "voice": {"languageCode": language_code, "name": voice_name},
+            "audioConfig": {"audioEncoding": "MP3"},
+        },
+        timeout=HTTP_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        raise TTSError(f"Google Cloud TTS error: {resp.text[:300]}", "google_cloud_tts")
+    try:
+        audio_b64 = resp.json()["audioContent"]
+    except (KeyError, ValueError, TypeError) as exc:
+        raise TTSError(
+            f"Google Cloud TTS response parse error: {exc} -- raw response: {resp.text[:300]}",
+            "google_cloud_tts",
+        ) from exc
+    audio_bytes = base64.b64decode(audio_b64)
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise TTSError("Audio response exceeded 25 MB", "google_cloud_tts")
+    with open(output_path, "wb") as handle:
+        handle.write(audio_bytes)
+
+
+def synth_deepgram(text, output_path, config):
+    """Deepgram Aura-2 TTS. The "model" IS the voice choice (e.g.
+    aura-2-thalia-en) -- Deepgram has no separate voice/model split like
+    ElevenLabs or Cartesia, so this reuses the voice field for both."""
+    keys = _split_keys(config.get("deepgram_api_key"))
+    if not keys:
+        raise TTSError("A Deepgram API key is required", "deepgram")
+    model = _resolve_voice("deepgram", config)
+    last = ""
+    for key in keys:
+        resp = requests.post(
+            "https://api.deepgram.com/v1/speak",
+            params={"model": model, "encoding": "mp3"},
+            headers={"Authorization": f"Token {key}", "Content-Type": "application/json"},
+            json={"text": text},
+            timeout=HTTP_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            _write_audio(resp, output_path, "deepgram")
+            return
+        last = resp.text[:300]
+        if resp.status_code not in (401, 403, 429):
+            break
+    raise TTSError(f"Deepgram error: {last}", "deepgram")
+
+
 def synth_gemini(text, output_path, config, ffmpeg_bin="ffmpeg"):
     keys = _split_keys(config.get("gemini_api_key"))
     if not keys:
@@ -333,7 +419,9 @@ def synth_vertex_gemini(text, output_path, config, ffmpeg_bin="ffmpeg"):
     location = config.get("vertex_location") or "us-central1"
     try:
         token = vertex_auth.get_access_token(service_account_json)
-        url = vertex_auth.generate_content_url(project_id, location, _resolve_model("vertex_gemini", config))
+        model = _resolve_model("vertex_gemini", config)
+        api_version = "v1beta1" if "preview" in model else "v1"
+        url = vertex_auth.generate_content_url(project_id, location, model, api_version=api_version)
     except ValueError as exc:
         raise TTSError(str(exc), "vertex_gemini") from exc
 
@@ -362,7 +450,10 @@ def synth_vertex_gemini(text, output_path, config, ffmpeg_bin="ffmpeg"):
         inline = resp.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
         pcm_bytes = base64.b64decode(inline["data"])
     except (KeyError, IndexError, ValueError, TypeError) as exc:
-        raise TTSError(f"Vertex AI TTS response parse error: {exc}", "vertex_gemini") from exc
+        raise TTSError(
+            f"Vertex AI TTS response parse error: {exc} -- raw response: {resp.text[:300]}",
+            "vertex_gemini",
+        ) from exc
 
     raw_path = output_path + ".pcm"
     try:
@@ -505,6 +596,8 @@ PROVIDERS = {
     "gemini": synth_gemini,
     "vertex_gemini": synth_vertex_gemini,
     "ai33pro": synth_ai33pro,
+    "deepgram": synth_deepgram,
+    "google_cloud_tts": synth_google_cloud_tts,
 }
 
 

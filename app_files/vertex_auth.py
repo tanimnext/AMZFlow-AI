@@ -50,14 +50,20 @@ def get_access_token(service_account_json: str) -> str:
         return credentials.token
 
 
-def generate_content_url(project_id: str, location: str, model: str) -> str:
-    """Builds the Vertex AI publishers/google/models generateContent URL."""
+def generate_content_url(project_id: str, location: str, model: str, api_version: str = "v1") -> str:
+    """Builds the Vertex AI publishers/google/models generateContent URL.
+
+    Preview models (e.g. the "-preview-tts" Gemini TTS models) are only
+    served on the v1beta1 surface -- v1 answers with a 200 that has no
+    "candidates" key, since the model isn't recognized there yet.
+    """
     project = str(project_id or "").strip()
     if not project:
         raise ValueError("No Vertex AI project ID configured (Settings -> AI Provider -> Google Cloud)")
     loc = str(location or "us-central1").strip() or "us-central1"
     host = "aiplatform.googleapis.com" if loc == "global" else f"{loc}-aiplatform.googleapis.com"
+    version = str(api_version or "v1").strip() or "v1"
     return (
-        f"https://{host}/v1/projects/{project}/locations/{loc}"
+        f"https://{host}/{version}/projects/{project}/locations/{loc}"
         f"/publishers/google/models/{model}:generateContent"
     )

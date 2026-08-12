@@ -48,7 +48,7 @@
                     </div>
                     <p class="hint mb-2">If the primary provider fails on all of its keys, these are tried in order. Each row reuses that provider's own API key(s) — no extra credentials needed.</p>
                     <div id="llmChainRows" class="space-y-2 mb-2"></div>
-                    <textarea id="llm_chain" data-setting="false" class="hidden" aria-hidden="true"></textarea>
+                    <textarea id="llm_chain" class="hidden" aria-hidden="true"></textarea>
                     <button type="button" id="llmChainAddBtn" class="btn btn-sm w-full">+ Add fallback provider</button>
                     <button type="button" id="testLlmBtn" class="btn btn-primary btn-sm w-full mt-2">Test LLM (Primary + Fallback Chain)</button>
                     <div id="llm_test_result" class="mt-2"></div>
@@ -104,6 +104,19 @@
                 <label class="field"><span class="label">TTS Provider</span>
                     <select id="tts_service"></select></label>
                 <div id="ttsProviderPanel"></div>
+            </div>
+
+            <div class="card-pad pt-0">
+                <div class="pt-4" style="border-top:1px solid var(--border)">
+                    <div class="flex items-center justify-between mb-2">
+                        <p class="section-label mb-0">Voice Fallback Chain</p>
+                        <label class="switch"><input type="checkbox" id="tts_fallback_enabled"><span class="slider"></span></label>
+                    </div>
+                    <p class="hint mb-2">If the primary voice provider fails, these are tried next, in the order below -- drag to reorder. Any other provider with a saved key is also tried automatically after this list; Edge TTS (free, no key) is always the final fallback.</p>
+                    <div id="ttsChainRows" class="space-y-2 mb-2"></div>
+                    <textarea id="tts_chain" class="hidden" aria-hidden="true"></textarea>
+                    <button type="button" id="ttsChainAddBtn" class="btn btn-sm w-full">+ Add fallback voice provider</button>
+                </div>
             </div>
 
             <div class="card-pad pt-0">

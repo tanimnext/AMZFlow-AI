@@ -138,6 +138,43 @@ PROVIDERS = {
         "director": False,
         "paid": True,
     },
+    "google_cloud_tts": {
+        "label": "Google Cloud TTS (Chirp3-HD / WaveNet)",
+        "blurb": (
+            "Chirp3-HD is the most human-like free tier Google offers (1M characters/month "
+            "free, then paid). Billed through the same Google Cloud project configured under "
+            "AI Provider -> Google Cloud (Vertex AI) -- set the service account JSON, project "
+            "ID, and region there; a different Google API from \"Gemini TTS via Google Cloud\" "
+            "above, same billing account."
+        ),
+        # Same reasoning as vertex_gemini below: no key_field/extra_fields --
+        # the AI Provider panel already renders the shared vertex_project_id/
+        # vertex_location/vertex_service_account_private_key inputs.
+        "needs_key": False,
+        "key_field": None,
+        "voice_field": "google_tts_voice_id",
+        "model_field": None,
+        "voices": "static",
+        "models": None,
+        "supports_rate": False,
+        "supports_pitch": False,
+        "director": False,
+        "paid": False,
+    },
+    "deepgram": {
+        "label": "Deepgram Aura-2 (Paid)",
+        "blurb": "Fast, natural-sounding voices; the model id doubles as the voice choice.",
+        "needs_key": True,
+        "key_field": "deepgram_api_key",
+        "voice_field": "deepgram_voice_id",
+        "model_field": None,
+        "voices": "static",
+        "models": None,
+        "supports_rate": False,
+        "supports_pitch": False,
+        "director": False,
+        "paid": True,
+    },
     "vertex_gemini": {
         "label": "Gemini TTS via Google Cloud (Vertex AI)",
         "blurb": (
@@ -278,8 +315,38 @@ def _fetch_cartesia(api_key):
     return out
 
 
+DEEPGRAM_AURA2_VOICES = [
+    ("aura-2-thalia-en", "Thalia (US Female)"),
+    ("aura-2-luna-en", "Luna (US Female)"),
+    ("aura-2-stella-en", "Stella (US Female)"),
+    ("aura-2-athena-en", "Athena (UK Female)"),
+    ("aura-2-hera-en", "Hera (US Female)"),
+    ("aura-2-orion-en", "Orion (US Male)"),
+    ("aura-2-arcas-en", "Arcas (US Male)"),
+    ("aura-2-perseus-en", "Perseus (US Male)"),
+    ("aura-2-angus-en", "Angus (Irish Male)"),
+    ("aura-2-orpheus-en", "Orpheus (US Male)"),
+    ("aura-2-helios-en", "Helios (UK Male)"),
+    ("aura-2-zeus-en", "Zeus (US Male)"),
+]
+
+GOOGLE_CLOUD_TTS_VOICES = [
+    ("en-US-Chirp3-HD-Sulafat", "Sulafat (Warm Female)", "Chirp3-HD"),
+    ("en-US-Chirp3-HD-Umbriel", "Umbriel (Calm Male)", "Chirp3-HD"),
+    ("en-US-Chirp3-HD-Vindemiatrix", "Vindemiatrix (Gentle Female)", "Chirp3-HD"),
+    ("en-US-Chirp3-HD-Zubenelgenubi", "Zubenelgenubi (Casual Male)", "Chirp3-HD"),
+    ("en-US-Chirp3-HD-Schedar", "Schedar (Even Male)", "Chirp3-HD"),
+    ("en-US-Chirp3-HD-Achernar", "Achernar (Female)", "Chirp3-HD"),
+    ("en-US-Chirp3-HD-Algenib", "Algenib (Male)", "Chirp3-HD"),
+    ("en-US-Wavenet-D", "Wavenet D (Male, higher free quota)", "WaveNet"),
+    ("en-US-Wavenet-F", "Wavenet F (Female, higher free quota)", "WaveNet"),
+    ("en-US-Standard-C", "Standard C (Female, largest free quota)", "Standard"),
+]
+
 VOICE_FALLBACKS = {
     "edge": _edge_static,
+    "deepgram": lambda: [_voice(vid, label, "Aura-2") for vid, label in DEEPGRAM_AURA2_VOICES],
+    "google_cloud_tts": lambda: [_voice(vid, label, group) for vid, label, group in GOOGLE_CLOUD_TTS_VOICES],
     "kokoro": lambda: [_voice(v, label, group) for v, label, group in KOKORO_VOICES],
     "gemini": lambda: [
         _voice(name, f"{name} — {style}", "Gemini") for name, style in GEMINI_TTS_VOICES.items()
@@ -368,7 +435,7 @@ def list_voices(provider: str, api_key: str = "", refresh: bool = False) -> dict
     )
     result["provider"] = provider
     # Providers with no catalog at all still accept a hand-entered voice ID.
-    result["allowCustom"] = not result["items"] or provider in {"elevenlabs", "cartesia", "ai33pro"}
+    result["allowCustom"] = not result["items"] or provider in {"elevenlabs", "cartesia", "ai33pro", "deepgram", "google_cloud_tts"}
     return result
 
 
