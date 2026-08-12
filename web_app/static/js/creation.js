@@ -581,8 +581,38 @@
         try {
             await api(`/api/content-batches/${currentContentBatch.batchId}/prepare`, { method: "POST", body: {} });
             await startGeneration({ videoCount: approved.length });
+            loadContentHistory();
         } catch (err) {
             showContentBatchError(err.message);
+        }
+    }
+
+    async function loadContentHistory() {
+        const body = $("#contentHistoryBody");
+        if (!body) return;
+        try {
+            const result = await api("/api/content-batches/history?limit=30");
+            const rows = result.data || [];
+            if (!rows.length) {
+                body.innerHTML = `<tr><td colspan="4" class="text-center" style="color:var(--text-faint)">No videos generated yet.</td></tr>`;
+                return;
+            }
+            body.innerHTML = rows.map((row) => {
+                let host = row.sourceUrl;
+                try { host = new URL(row.sourceUrl).hostname; } catch (_) {}
+                const when = row.generatedAt ? new Date(row.generatedAt).toLocaleString() : "";
+                const watchCell = row.hasVideo
+                    ? `<a class="btn btn-sm" href="/video/${encodeURIComponent(row.projectId)}" target="_blank" rel="noopener">▶ Watch</a>`
+                    : `<span class="hint">Not found</span>`;
+                return `<tr>
+                    <td class="font-medium" style="color:var(--text)">${escapeHtml(row.keyword)}</td>
+                    <td class="truncate max-w-[170px]" title="${escapeHtml(host)}">${escapeHtml(host)}</td>
+                    <td>${escapeHtml(when)}</td>
+                    <td class="text-right">${watchCell}</td>
+                </tr>`;
+            }).join("");
+        } catch (err) {
+            body.innerHTML = `<tr><td colspan="4" class="text-center" style="color:var(--danger-600)">${escapeHtml(err.message)}</td></tr>`;
         }
     }
 
@@ -816,6 +846,7 @@
         updateASINStats();
         updateContentUrlCount();
         loadLatestContentBatch();
+        loadContentHistory();
 
         $$("input, textarea, select").forEach((el) => {
             if (!el.id || el.dataset.setting === "false" || el.dataset.noAutosave === "1") return;

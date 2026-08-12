@@ -187,6 +187,33 @@ class WebSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         save_settings.assert_called_once()
 
+    def test_video_route_rejects_path_traversal(self):
+        response = self.client.get("/video/../../etc/passwd")
+        self.assertIn(response.status_code, (400, 404))
+
+    def test_video_route_404s_when_no_video_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(self.module, "library_root", return_value=tmp):
+                response = self.client.get("/video/nonexistent-project")
+        self.assertEqual(response.status_code, 404)
+
+    def test_content_batches_history_reports_missing_video_as_not_found(self):
+        fake_job = {
+            "jobId": "job1", "keyword": "Best Robot Vacuums",
+            "sourceUrl": "https://reviews.example/robot-vacuums",
+            "generatedAt": "2026-08-12T00:00:00",
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(self.module, "library_root", return_value=tmp):
+            store, _ = self.module._content_batch_services()
+            with patch.object(store, "list_generated_jobs", return_value=[fake_job]):
+                response = self.client.get("/api/content-batches/history")
+        self.assertEqual(response.status_code, 200)
+        row = response.get_json()["data"][0]
+        self.assertEqual(row["keyword"], "Best Robot Vacuums")
+        self.assertFalse(row["hasVideo"])
+        self.assertEqual(row["projectId"], "best-robot-vacuums")
+
     def test_gemini_preview_uses_selected_model_and_director_prompt(self):
         # v7's /preview_tts is async (job id + poll) and cached, and both the
         # preview route and the render pipeline now share tts_engine.py's
@@ -273,6 +300,33 @@ class WebSecurityTests(unittest.TestCase):
         response = self.client.get("/get_settings")
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(response.headers["X-Frame-Options"], "DENY")
+
+
+class MachineIdTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import web_app.app as app_module
+
+        cls.module = app_module
+
+    def test_macos_uses_stable_hardware_uuid_instead_of_network_guess(self):
+        fake_ioreg_output = (
+            '+-o Mac : <class IOPlatformExpertDevice>\n'
+            '    "IOPlatformUUID" = "C5A1688F-DA50-5698-9B9C-0AF270F2E5EA"\n'
+        )
+        with patch.object(self.module.sys, "platform", "darwin"), \
+             patch.object(self.module.os, "name", "posix"), \
+             patch("subprocess.check_output", return_value=fake_ioreg_output.encode()):
+            self.assertEqual(
+                self.module.get_machine_id(), "C5A1688F-DA50-5698-9B9C-0AF270F2E5EA"
+            )
+
+    def test_macos_falls_back_when_ioreg_is_unavailable(self):
+        with patch.object(self.module.sys, "platform", "darwin"), \
+             patch.object(self.module.os, "name", "posix"), \
+             patch("subprocess.check_output", side_effect=FileNotFoundError):
+            machine_id = self.module.get_machine_id()
+        self.assertTrue(machine_id.startswith("GEN-"))
 
 
 if __name__ == "__main__":

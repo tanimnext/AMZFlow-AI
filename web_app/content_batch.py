@@ -853,6 +853,18 @@ class BatchStore:
                 (_now(), _now(), batch_id),
             )
 
+    def list_generated_jobs(self, limit: int = 30) -> list[dict]:
+        """Flattened, newest-first list of jobs that have actually been sent
+        to the render pipeline -- the History view."""
+        safe_limit = max(1, min(100, int(limit)))
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM content_jobs WHERE generated_at != '' "
+                "ORDER BY generated_at DESC LIMIT ?",
+                (safe_limit,),
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
+
     def set_status(self, job_id: str, status: str, error: str = "") -> dict:
         allowed = {
             "QUEUED",

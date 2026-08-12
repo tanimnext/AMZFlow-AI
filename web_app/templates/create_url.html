@@ -54,6 +54,28 @@
     </div>
 </section>
 
+<section class="card mb-5" aria-labelledby="content-history-heading">
+    <div class="card-head">
+        <div>
+            <h2 id="content-history-heading" class="card-title">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+                History
+            </h2>
+            <p class="card-sub">Videos already generated from this queue. Click Watch to play the finished video.</p>
+        </div>
+    </div>
+    <div id="contentHistoryTable" class="table-wrap mx-5 mb-5" style="width:calc(100% - 2.5rem)">
+        <table class="data" style="min-width:600px">
+            <thead>
+                <tr><th>Video Keyword</th><th>Source</th><th>Generated</th><th class="text-right">Video</th></tr>
+            </thead>
+            <tbody id="contentHistoryBody">
+                <tr><td colspan="4" class="text-center" style="color:var(--text-faint)">No videos generated yet.</td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
 {% include "_render_options.html" %}
 {% endblock %}
 

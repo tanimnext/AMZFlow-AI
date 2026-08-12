@@ -59,6 +59,7 @@ from product_core import (
     parse_youtube_text,
     public_settings,
     resolve_project_dir,
+    slugify,
     validate_output_root,
     validate_publish_options,
 )
@@ -434,6 +435,25 @@ def get_machine_id():
                 serial = subprocess.check_output(cmd, shell=True).decode().split('\n')[1].strip()
                 if serial: return f"DISK-{serial}"
             except: pass
+
+        elif sys.platform == 'darwin':  # macOS
+            # IOPlatformUUID -- tied to the logic board, stable across
+            # reboots/network changes/reinstalls. uuid.getnode() (the
+            # fallback below) guesses from whichever network interface
+            # responds first, and that pick is not guaranteed identical
+            # across reboots (Wi-Fi, VPN tunnels, Bluetooth PAN, Thunderbolt
+            # Bridge all compete) -- a restart could silently change the
+            # bound machine ID and lock a legitimately-activated user out.
+            try:
+                output = subprocess.check_output(
+                    ['ioreg', '-rd1', '-c', 'IOPlatformExpertDevice'],
+                    stderr=subprocess.DEVNULL,
+                ).decode()
+                match = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', output)
+                if match:
+                    return match.group(1)
+            except Exception:
+                pass
 
         # Fallback for all OS
         import uuid
@@ -977,6 +997,35 @@ def prepare_content_batch(batch_id):
     _write_keywords_file(lines)
     store.mark_generated(batch_id)
     return jsonify({"data": {"batchId": batch_id, "videoCount": len(lines)}})
+
+
+@app.route("/api/content-batches/history")
+def content_batches_history():
+    """Past URL-to-Video jobs that were actually sent to the render
+    pipeline, newest first, each pointing at its output video if the
+    render finished (amazon_video_maker.py's keyword folder is
+    slugify(job.keyword) -- see main_pipeline())."""
+    try:
+        limit = int(request.args.get("limit", "30"))
+    except ValueError:
+        return _api_error("VALIDATION_ERROR", "limit must be an integer", 422)
+    store, _ = _content_batch_services()
+    jobs = store.list_generated_jobs(limit)
+    root = library_root()
+    data = []
+    for job in jobs:
+        project_id = slugify(job["keyword"], fallback="")
+        k_path = os.path.join(root, project_id) if project_id else ""
+        has_video = bool(project_id and os.path.isdir(k_path) and _find_video_file(project_id, k_path))
+        data.append({
+            "jobId": job["jobId"],
+            "keyword": job["keyword"],
+            "sourceUrl": job["sourceUrl"],
+            "generatedAt": job["generatedAt"],
+            "projectId": project_id,
+            "hasVideo": has_video,
+        })
+    return jsonify({"data": data})
 
 
 def _write_keywords_file(lines):
@@ -1792,7 +1841,23 @@ def get_thumbnail(keyword):
     thumb_file = _find_thumbnail_file(k_path)
     if thumb_file:
         return send_from_directory(k_path, thumb_file)
-    
+
+    return "Not Found", 404
+
+@app.route('/video/<path:keyword>')
+def get_video(keyword):
+    """Serves a generated project's video file for in-browser playback.
+    send_from_directory handles Range requests itself, so the <video> tag
+    can seek/scrub instead of only downloading the whole file first."""
+    try:
+        k_path = project_path(keyword)
+    except ValueError:
+        return "Not Found", 404
+
+    video_file = _find_video_file(keyword, k_path)
+    if video_file:
+        return send_from_directory(k_path, video_file, conditional=True)
+
     return "Not Found", 404
 
 @app.route('/get_metadata')
