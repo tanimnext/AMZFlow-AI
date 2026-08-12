@@ -140,9 +140,21 @@ PROVIDERS = {
     },
     "vertex_gemini": {
         "label": "Gemini TTS via Google Cloud (Vertex AI)",
-        "blurb": "Same Gemini voices as \"Gemini TTS\", billed to a Google Cloud project's $300 free-trial credit via a service account instead of a separate API key.",
-        "needs_key": True,
-        "key_field": "vertex_service_account_private_key",
+        "blurb": (
+            "Same Gemini voices as \"Gemini TTS\", billed through the Google Cloud project "
+            "configured under AI Provider -> Google Cloud (Vertex AI) -- set the service "
+            "account JSON, project ID, and region there; both LLM and TTS share one config."
+        ),
+        # No key_field/extra_fields here on purpose: the AI Provider panel
+        # already renders inputs with these exact ids (vertex_project_id,
+        # vertex_location, vertex_service_account_private_key) for the same
+        # underlying settings. Two panels rendering elements with the same
+        # id at once meant getElementById() only ever reached the first one
+        # (the AI Provider panel) on page load -- the Voice panel's
+        # identical-id inputs stayed empty, which looked like a saved
+        # config "disappearing" after every reload.
+        "needs_key": False,
+        "key_field": None,
         "voice_field": "gemini_tts_voice",
         "model_field": "vertex_tts_model",
         "voices": "static",
@@ -151,10 +163,6 @@ PROVIDERS = {
         "supports_pitch": False,
         "director": True,
         "paid": False,
-        "extra_fields": [
-            {"field": "vertex_project_id", "label": "Google Cloud Project ID", "placeholder": "my-project-id"},
-            {"field": "vertex_location", "label": "Region", "placeholder": "us-central1"},
-        ],
     },
 }
 
