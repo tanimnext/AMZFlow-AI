@@ -1826,12 +1826,16 @@ def _provider_config(provider):
 
 
 def _build_llm_chain():
-    """Primary provider (LLM_SERVICE) first, then -- only if the user opted
-    in via llm_fallback_enabled -- additional 'provider|model' lines from
-    LLM_CHAIN_RAW, each reusing that provider's OWN already-configured keys.
-    No fallback configured means a single-entry chain: identical behavior to
-    before this refactor, just running through the shared, more robust
-    client instead of a fourth copy of the same dispatch logic."""
+    """Primary provider (LLM_SERVICE) first, then:
+    1. If the user opted in via llm_fallback_enabled, additional
+       'provider|model' lines from LLM_CHAIN_RAW (explicit order/model choice).
+    2. Automatically, every OTHER provider that already has a usable key/
+       credential saved in Settings, in _LLM_PROVIDERS order. A render used
+       to hard-fail every single ASIN the moment the one configured provider
+       had a bad key, hit a quota, or (Vertex AI) wasn't fully set up yet --
+       even though the user often has a second provider's key sitting right
+       there in Settings, unused. This doesn't touch the primary provider
+       choice; it only decides what to try next if that one is unusable."""
     primary = LLM_SERVICE if LLM_SERVICE in _LLM_PROVIDERS else "longcat"
     seen = {primary}
     keys, model, endpoint = _provider_config(primary)
@@ -1850,6 +1854,14 @@ def _build_llm_chain():
             seen.add(prov)
             keys, default_model, endpoint = _provider_config(prov)
             chain.append({"provider": prov, "model": mdl or default_model, "api_keys": keys, "endpoint": endpoint})
+
+    for prov in _LLM_PROVIDERS:
+        if prov in seen:
+            continue
+        seen.add(prov)
+        keys, default_model, endpoint = _provider_config(prov)
+        if keys:  # only add providers that actually have a key/credential saved
+            chain.append({"provider": prov, "model": default_model, "api_keys": keys, "endpoint": endpoint})
     return chain
 
 
