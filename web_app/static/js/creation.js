@@ -773,6 +773,7 @@
         startBtn.innerHTML = `<span class="spinner"></span> Processing…`;
         currentProg = 0;
         let sessionVideoCount = 0;
+        let failedKeywords = [];
         setProgress(0, "Starting…");
 
         const source = new EventSource(`/run_process?csrf_token=${encodeURIComponent(window.CSRF_TOKEN)}`);
@@ -790,6 +791,14 @@
                 setProgress(100, "Completed");
                 if (logArea.textContent.includes("[QUOTA REACHED]")) {
                     modal({ title: "Quota exceeded", message: `Process stopped because you hit your limit. Videos created this session: ${sessionVideoCount}.`, kind: "error", confirmText: "OK" });
+                } else if (failedKeywords.length && sessionVideoCount > 0) {
+                    // Partial success: some keywords produced a video, at
+                    // least one didn't. This used to show the same plain
+                    // "completed" toast as a clean run -- the failure was
+                    // only visible if you scrolled back through the log.
+                    toast(`${sessionVideoCount} video(s) created, ${failedKeywords.length} failed: ${failedKeywords.join(", ")}`, "warn", 9000);
+                } else if (failedKeywords.length) {
+                    toast(`All ${failedKeywords.length} keyword(s) failed: ${failedKeywords.join(", ")} -- check the log for the reason.`, "error", 9000);
                 } else if (sessionVideoCount > 0) {
                     toast(`Video generation completed — ${sessionVideoCount} video(s) created`, "ok", 6000);
                 } else {
@@ -801,6 +810,8 @@
             } else if (line.startsWith("__SESSION_COUNT__:")) {
                 sessionVideoCount = parseInt(line.split(":")[1], 10);
                 if (videoCountDisplay) videoCountDisplay.textContent = `${sessionVideoCount}/${total}`;
+            } else if (line.startsWith("__FAILED_KEYWORDS__:")) {
+                failedKeywords = line.slice("__FAILED_KEYWORDS__:".length).split(",").filter(Boolean);
             } else {
                 logArea.textContent += line + "\n";
                 logArea.scrollTop = logArea.scrollHeight;

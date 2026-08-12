@@ -2781,8 +2781,6 @@ async def main_pipeline():
         reset_audio_stats()
         os.makedirs(base_dir, exist_ok=True)
 
-        processed = []
-        process_start = time.time()
         # Single source of truth for the rest of this keyword's processing.
         # Previously this was recomputed twice more below from
         # len(processed) *after* some requested ASINs could have failed --
@@ -2792,42 +2790,59 @@ async def main_pipeline():
         # differently-shaped script. Keeping one value for the whole keyword
         # guarantees the script shape and the render branch always agree.
         is_single = len([a for a in asins if a]) == 1
-        # Reduced from 10 to 4: 10 parallel ASIN workers each fired every
-        # paragraph's TTS simultaneously (asyncio.gather), opening dozens of
-        # concurrent connections to the free edge_tts endpoint at once and
-        # getting throttled/reset -- the root cause of "sound missing in
-        # parts". The threading-based _TTS_GATE (see generate_tts) caps
-        # actual TTS concurrency regardless of worker count, but fewer
-        # workers means less scraping/LLM work piles up waiting on it.
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            future_to_asin = {
-                ex.submit(process_single_asin, a, keyword, base_dir, is_single_asin=is_single): a
-                for a in asins
-                if a
-            }
-            for f in as_completed(future_to_asin):
-                asin = future_to_asin[f]
-                try:
-                    res = f.result()
-                except Exception as e:
-                    # Previously unguarded: one ASIN raising (e.g. Amazon
-                    # blocked the scrape, or the LLM call failed) crashed the
-                    # entire `for line in lines` loop, killing every other
-                    # keyword still queued in this batch, not just this ASIN.
-                    print(f"[ERROR] ASIN worker failed for {asin}: {e}")
-                    res = None
-                if res:
-                    processed.append(res)
-                    print(f"[SUCCESS] ASIN {asin} ready ({len(processed)}/{len(future_to_asin)})")
-                else:
-                    print(f"[WARN] ASIN {asin} produced no usable result")
 
-        process_end = time.time()
-        if processed:
-            print(f"[SUCCESS] Processed {len(processed)} products (Scraping + AI + TTS) in {process_end - process_start:.2f}s")
+        # Retry the whole ASIN batch once if every single ASIN failed. A
+        # keyword used to be skipped forever on the first pass, even for a
+        # purely transient cause (a misconfigured LLM provider that was then
+        # fixed mid-run, a rate limit, a flaky Amazon fetch) -- so a single
+        # bad minute anywhere lost the entire keyword with no way to recover
+        # short of resubmitting it by hand. Reuses the SAME base_dir, so any
+        # per-ASIN assets the first attempt did manage to download are not
+        # re-fetched (see the folder-reuse comment above).
+        processed = []
+        keyword_attempts = 2
+        for keyword_attempt in range(1, keyword_attempts + 1):
+            processed = []
+            process_start = time.time()
+            # Reduced from 10 to 4: 10 parallel ASIN workers each fired every
+            # paragraph's TTS simultaneously (asyncio.gather), opening dozens of
+            # concurrent connections to the free edge_tts endpoint at once and
+            # getting throttled/reset -- the root cause of "sound missing in
+            # parts". The threading-based _TTS_GATE (see generate_tts) caps
+            # actual TTS concurrency regardless of worker count, but fewer
+            # workers means less scraping/LLM work piles up waiting on it.
+            with ThreadPoolExecutor(max_workers=4) as ex:
+                future_to_asin = {
+                    ex.submit(process_single_asin, a, keyword, base_dir, is_single_asin=is_single): a
+                    for a in asins
+                    if a
+                }
+                for f in as_completed(future_to_asin):
+                    asin = future_to_asin[f]
+                    try:
+                        res = f.result()
+                    except Exception as e:
+                        # Previously unguarded: one ASIN raising (e.g. Amazon
+                        # blocked the scrape, or the LLM call failed) crashed the
+                        # entire `for line in lines` loop, killing every other
+                        # keyword still queued in this batch, not just this ASIN.
+                        print(f"[ERROR] ASIN worker failed for {asin}: {e}")
+                        res = None
+                    if res:
+                        processed.append(res)
+                        print(f"[SUCCESS] ASIN {asin} ready ({len(processed)}/{len(future_to_asin)})")
+                    else:
+                        print(f"[WARN] ASIN {asin} produced no usable result")
+
+            process_end = time.time()
+            if processed:
+                print(f"[SUCCESS] Processed {len(processed)} products (Scraping + AI + TTS) in {process_end - process_start:.2f}s")
+                break
+            if keyword_attempt < keyword_attempts:
+                print(f"[RETRY] '{keyword}': every ASIN failed on attempt {keyword_attempt}/{keyword_attempts} -- retrying the whole keyword once.")
 
         if not processed:
-            print(f"[FATAL] No products could be processed for '{keyword}' -- skipping this keyword (no video produced, quota not used).")
+            print(f"[FATAL] No products could be processed for '{keyword}' after {keyword_attempts} attempts -- skipping this keyword (no video produced, quota not used).")
             continue
 
         processed = order_products(processed, product_order)

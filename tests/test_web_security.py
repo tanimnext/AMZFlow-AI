@@ -201,6 +201,34 @@ class WebSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         save_settings.assert_called_once()
 
+    def test_keyword_failure_tracker_reports_a_fatal_keyword(self):
+        track = self.module._track_keyword_failure
+        keyword, failed = None, []
+        keyword, failed = track("--- Keyword: best-robot-vacuums ---\n", keyword, failed)
+        self.assertEqual(keyword, "best-robot-vacuums")
+        self.assertEqual(failed, [])
+        keyword, failed = track(
+            "[FATAL] No products could be processed for 'best-robot-vacuums'\n", keyword, failed,
+        )
+        self.assertEqual(failed, ["best-robot-vacuums"])
+
+    def test_keyword_failure_tracker_does_not_duplicate_repeated_fatal_lines(self):
+        track = self.module._track_keyword_failure
+        keyword, failed = "best-robot-vacuums", []
+        keyword, failed = track("[FATAL] first problem\n", keyword, failed)
+        keyword, failed = track("[FATAL] second problem, same keyword\n", keyword, failed)
+        self.assertEqual(failed, ["best-robot-vacuums"])
+
+    def test_keyword_failure_tracker_moves_on_to_the_next_keyword(self):
+        track = self.module._track_keyword_failure
+        keyword, failed = None, []
+        keyword, failed = track("--- Keyword: keyword-one ---\n", keyword, failed)
+        keyword, failed = track("[FATAL] keyword-one failed\n", keyword, failed)
+        keyword, failed = track("--- Keyword: keyword-two ---\n", keyword, failed)
+        keyword, failed = track("[SUCCESS] Video creation process finished for: keyword-two\n", keyword, failed)
+        self.assertEqual(keyword, "keyword-two")
+        self.assertEqual(failed, ["keyword-one"])
+
     def test_video_route_rejects_path_traversal(self):
         response = self.client.get("/video/../../etc/passwd")
         self.assertIn(response.status_code, (400, 404))

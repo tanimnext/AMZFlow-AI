@@ -407,6 +407,24 @@ def mark_video_uploaded(keyword, video_id, processing_status="processing", accou
     }
     save_uploaded_videos(uploaded)
 
+_KEYWORD_START_RE = re.compile(r"^--- Keyword: (.+?) ---")
+
+
+def _track_keyword_failure(line, current_keyword, failed_keywords):
+    """Updates (current_keyword, failed_keywords) from one line of the
+    render worker's stdout. A run where some keywords succeeded and others
+    didn't used to report only "did at least one video come out" -- a batch
+    of 5 keywords where 4 failed and 1 succeeded read exactly the same as a
+    clean 5-for-5 run. Pulled out of the /run_process generator so this
+    parsing can be unit tested without spawning a subprocess."""
+    match = _KEYWORD_START_RE.match(line.strip())
+    if match:
+        return match.group(1), failed_keywords
+    if "[FATAL]" in line and current_keyword and current_keyword not in failed_keywords:
+        return current_keyword, failed_keywords + [current_keyword]
+    return current_keyword, failed_keywords
+
+
 @functools.lru_cache(maxsize=1)
 def get_machine_id():
     """পিসির ইউনিক হার্ডওয়্যার আইডি বের করে (Windows এ একাধিক পদ্ধতিতে চেষ্টা করবে)"""
@@ -1171,7 +1189,9 @@ def run_process():
         initial_used = 0
 
     def generate(is_auth, email, name, m_id, q, start_count):
-        session_video_count = 0 
+        session_video_count = 0
+        failed_keywords = []  # every "--- Keyword: X ---" that never reached [SUCCESS] for it
+        current_keyword = None
         lock_acquired = GENERATION_LOCK.acquire(blocking=False)
         try:
             if not is_auth:
@@ -1230,6 +1250,7 @@ def run_process():
                         yield f"data: __SESSION_COUNT__:{session_video_count}\n\n"
                         break
                     yield f"data: {line.strip()}\n\n"
+                    current_keyword, failed_keywords = _track_keyword_failure(line, current_keyword, failed_keywords)
                     # Real-time Quota Update check: Look for success markers in script output
                     if "process finished for:" in line.lower():
                         try:
@@ -1237,18 +1258,22 @@ def run_process():
                             current_used += 1
                             session_video_count += 1
                             update_usage_on_sheet(email, current_used)
-                            
+
                             # Notify UI of the new count so it can update the progress bars
                             yield f"data: __SYNC_QUOTA__:{current_used}\n\n"
                             yield f"data: __SESSION_COUNT__:{session_video_count}\n\n"
-                            
+
                             # Update session to keep it fresh
                             session['video_used'] = current_used
+                            if current_keyword in failed_keywords:
+                                failed_keywords.remove(current_keyword)
                         except Exception as e:
                             print(f"Real-time sync error: {e}")
-            
+
             process.stdout.close()
             process.wait()
+            if failed_keywords:
+                yield f"data: __FAILED_KEYWORDS__:{','.join(failed_keywords)}\n\n"
 
         finally:
             if lock_acquired:
