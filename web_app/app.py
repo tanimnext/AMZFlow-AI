@@ -895,7 +895,8 @@ def content_batches():
             limit = int(request.args.get("limit", "10"))
         except ValueError:
             return _api_error("VALIDATION_ERROR", "limit must be an integer", 422)
-        return jsonify({"data": store.list_batches(limit)})
+        only_pending = request.args.get("active") == "1"
+        return jsonify({"data": store.list_batches(limit, only_pending=only_pending)})
     try:
         data = require_json_object()
         unknown = set(data) - {"urls"}
@@ -974,6 +975,7 @@ def prepare_content_batch(batch_id):
             422,
         )
     _write_keywords_file(lines)
+    store.mark_generated(batch_id)
     return jsonify({"data": {"batchId": batch_id, "videoCount": len(lines)}})
 
 

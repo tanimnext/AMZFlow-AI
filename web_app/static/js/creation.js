@@ -369,7 +369,10 @@
 
     async function loadLatestContentBatch() {
         try {
-            const result = await api("/api/content-batches?limit=1");
+            // active=1: skip batches that are fully generated already, so a
+            // completed batch doesn't reappear as "still needs review" on
+            // every page load/reload.
+            const result = await api("/api/content-batches?limit=1&active=1");
             if (!result.data.length) return;
             currentContentBatch = result.data[0];
             renderContentBatch(currentContentBatch);

@@ -412,6 +412,62 @@ class BatchStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "READY"):
             self.store.update_job(job["jobId"], {"isApproved": True})
 
+    def test_resubmitting_an_in_flight_url_is_rejected_as_a_duplicate(self):
+        self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        with self.assertRaisesRegex(ValueError, "already analyzed"):
+            self.store.create_batch(["https://reviews.example/robot-vacuums"])
+
+    def test_mark_generated_hides_a_fully_completed_batch_from_the_active_queue(self):
+        batch = self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        job = batch["jobs"][0]
+        self.store.complete_job(job["jobId"], {
+            "articleTitle": "Best Robot Vacuums", "keyword": "Best Robot Vacuums",
+            "contentType": "ROUNDUP", "confidence": 92, "revenuePotential": "HIGH",
+            "products": [{"asin": "B0ABC12345", "name": "CleanBot X1", "isIncluded": True}],
+        })
+        self.store.update_job(job["jobId"], {"isApproved": True})
+
+        pending_before = self.store.list_batches(only_pending=True)
+        self.assertEqual([b["batchId"] for b in pending_before], [batch["batchId"]])
+
+        self.store.mark_generated(batch["batchId"])
+
+        pending_after = self.store.list_batches(only_pending=True)
+        self.assertEqual(pending_after, [])
+        all_batches = self.store.list_batches()
+        self.assertEqual([b["batchId"] for b in all_batches], [batch["batchId"]])
+        self.assertIsNotNone(self.store.get_job(job["jobId"])["generatedAt"])
+
+    def test_resubmitting_a_generated_url_is_still_rejected_as_a_duplicate(self):
+        batch = self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        job = batch["jobs"][0]
+        self.store.complete_job(job["jobId"], {
+            "articleTitle": "Best Robot Vacuums", "keyword": "Best Robot Vacuums",
+            "contentType": "ROUNDUP", "confidence": 92, "revenuePotential": "HIGH",
+            "products": [{"asin": "B0ABC12345", "name": "CleanBot X1", "isIncluded": True}],
+        })
+        self.store.update_job(job["jobId"], {"isApproved": True})
+        self.store.mark_generated(batch["batchId"])
+
+        with self.assertRaisesRegex(ValueError, "already analyzed"):
+            self.store.create_batch(["https://reviews.example/robot-vacuums"])
+
+    def test_resubmitting_a_failed_url_is_allowed_as_a_retry(self):
+        batch = self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        job = batch["jobs"][0]
+        self.store.set_status(job["jobId"], "FAILED", "network error")
+
+        retry_batch = self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        self.assertEqual(len(retry_batch["jobs"]), 1)
+
+    def test_partial_duplicates_only_queue_the_new_urls(self):
+        self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        batch = self.store.create_batch([
+            "https://reviews.example/robot-vacuums",
+            "https://reviews.example/coffee-makers",
+        ])
+        self.assertEqual([j["sourceUrl"] for j in batch["jobs"]], ["https://reviews.example/coffee-makers"])
+
     def test_marks_products_repeated_across_batch_jobs(self):
         batch = self.store.create_batch(
             [

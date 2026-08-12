@@ -697,12 +697,20 @@ class BatchStore:
                     revenue_potential TEXT NOT NULL DEFAULT 'LOW',
                     products_json TEXT NOT NULL DEFAULT '[]',
                     is_approved INTEGER NOT NULL DEFAULT 0,
+                    generated_at TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(batch_id) REFERENCES content_batches(batch_id)
                 )
                 """
             )
+            # `generated_at` is new -- existing databases created before this
+            # column existed need it added explicitly; CREATE TABLE IF NOT
+            # EXISTS only applies to brand-new files.
+            try:
+                db.execute("ALTER TABLE content_jobs ADD COLUMN generated_at TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # already has the column
             db.execute(
                 "UPDATE content_jobs SET status = 'QUEUED' "
                 "WHERE status IN ('FETCHING', 'EXTRACTING', 'VALIDATING')"
@@ -724,6 +732,7 @@ class BatchStore:
             "revenuePotential": row["revenue_potential"],
             "products": json.loads(row["products_json"]),
             "isApproved": bool(row["is_approved"]),
+            "generatedAt": row["generated_at"] or None,
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -733,12 +742,33 @@ class BatchStore:
         batch_id = uuid.uuid4().hex
         created_at = _now()
         with self._connect() as db:
+            # A URL that already has a job elsewhere which is either done
+            # (generated_at set) or still in flight (any non-FAILED status)
+            # is a duplicate -- skip re-queuing it so the same article never
+            # gets analyzed/rendered twice. A URL whose only prior attempt(s)
+            # FAILED is still allowed through, so retrying by resubmitting
+            # the URL works.
+            placeholders = ",".join("?" * len(urls))
+            existing = db.execute(
+                f"SELECT DISTINCT source_url FROM content_jobs "
+                f"WHERE source_url IN ({placeholders}) "
+                f"AND (generated_at != '' OR status != 'FAILED')",
+                urls,
+            ).fetchall()
+            duplicate_urls = {row["source_url"] for row in existing}
+            new_urls = [url for url in urls if url not in duplicate_urls]
+            if not new_urls:
+                raise ValueError(
+                    "Every one of these URLs was already analyzed or generated. "
+                    "Check History, or remove them before submitting again."
+                )
+
             db.execute(
                 "INSERT INTO content_batches(batch_id, created_at, updated_at) "
                 "VALUES (?, ?, ?)",
                 (batch_id, created_at, created_at),
             )
-            for position, url in enumerate(urls):
+            for position, url in enumerate(new_urls):
                 db.execute(
                     """
                     INSERT INTO content_jobs(
@@ -791,15 +821,37 @@ class BatchStore:
             "jobs": jobs,
         }
 
-    def list_batches(self, limit: int = 10) -> list[dict]:
+    def list_batches(self, limit: int = 10, only_pending: bool = False) -> list[dict]:
+        """`only_pending=True` excludes batches where every job has already
+        been generated -- used to find "the batch still awaiting review/
+        approval" without a fully-completed batch reappearing as if it still
+        needed attention (e.g. on a page reload after Generate Approved)."""
         safe_limit = max(1, min(50, int(limit)))
         with self._connect() as db:
-            rows = db.execute(
-                "SELECT batch_id FROM content_batches "
-                "ORDER BY created_at DESC LIMIT ?",
-                (safe_limit,),
-            ).fetchall()
+            if only_pending:
+                rows = db.execute(
+                    "SELECT batch_id FROM content_batches b WHERE EXISTS ("
+                    "  SELECT 1 FROM content_jobs j WHERE j.batch_id = b.batch_id AND j.generated_at = ''"
+                    ") ORDER BY created_at DESC LIMIT ?",
+                    (safe_limit,),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT batch_id FROM content_batches "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (safe_limit,),
+                ).fetchall()
         return [self.get_batch(row["batch_id"]) for row in rows]
+
+    def mark_generated(self, batch_id: str) -> None:
+        """Marks every approved job in this batch as generated, so it drops
+        out of the "still needs review" queue and shows in History instead."""
+        with self._connect() as db:
+            db.execute(
+                "UPDATE content_jobs SET generated_at = ?, updated_at = ? "
+                "WHERE batch_id = ? AND is_approved = 1",
+                (_now(), _now(), batch_id),
+            )
 
     def set_status(self, job_id: str, status: str, error: str = "") -> dict:
         allowed = {
