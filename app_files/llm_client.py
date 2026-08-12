@@ -130,6 +130,58 @@ def call_with_keys(provider, prompt, api_keys, model, endpoint=None, timeout=30,
     raise last_err or LLMCallError(f"All keys failed for provider '{provider}'", retryable=False)
 
 
+PROVIDER_ORDER = ("gemini", "vertex_gemini", "openrouter", "openai", "deepseek", "longcat")
+
+
+def build_chain(primary, provider_config, fallback_enabled=False, chain_raw="", order=PROVIDER_ORDER):
+    """Builds the ordered chain call_chain() consumes.
+
+    amazon_video_maker.py (script writing) and metadata_generator.py (YouTube
+    title/description/tags) run as separate processes and each used to carry
+    its own copy of this logic. They drifted exactly the way duplicated logic
+    does: metadata_generator's copy never learned about "vertex_gemini", so a
+    user who picked Vertex as their provider was silently downgraded to
+    whichever id sat first in that file's tuple (longcat) for every metadata
+    call -- even with no longcat key saved. Both callers now pass their own
+    `provider_config` lookup into this one implementation.
+
+    provider_config: callable(provider) -> (api_keys, default_model, endpoint)
+
+    Order is: the primary provider, then the user's own manual chain (only if
+    they opted in), then automatically every other provider that already has
+    a usable credential saved. The primary keeps its slot even with no key --
+    call_chain() then reports "no keys configured" for it, which surfaces the
+    real problem instead of hiding it behind a silent substitution.
+    """
+    primary = primary if primary in order else order[-1]
+    seen = {primary}
+    keys, model, endpoint = provider_config(primary)
+    chain = [{"provider": primary, "model": model, "api_keys": keys, "endpoint": endpoint}]
+
+    if fallback_enabled and chain_raw:
+        for line in str(chain_raw).split("\n"):
+            line = line.strip()
+            if not line or "|" not in line:
+                continue
+            prov, _, mdl = line.partition("|")
+            prov = prov.strip().lower()
+            mdl = mdl.strip()
+            if prov in seen or prov not in order:
+                continue
+            seen.add(prov)
+            keys, default_model, endpoint = provider_config(prov)
+            chain.append({"provider": prov, "model": mdl or default_model, "api_keys": keys, "endpoint": endpoint})
+
+    for prov in order:
+        if prov in seen:
+            continue
+        seen.add(prov)
+        keys, default_model, endpoint = provider_config(prov)
+        if keys:  # only providers that actually have a key/credential saved
+            chain.append({"provider": prov, "model": default_model, "api_keys": keys, "endpoint": endpoint})
+    return chain
+
+
 def call_chain(prompt, chain, timeout=30):
     """chain: ordered list of dicts, each {"provider", "model", "api_keys",
     "endpoint"(optional)}. Tries each entry in order; an entry is exhausted

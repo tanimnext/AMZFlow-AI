@@ -18,8 +18,10 @@ import hashlib
 import json
 import os
 import subprocess
+import threading
 import time
 import unicodedata
+from datetime import datetime, timezone
 
 import requests
 
@@ -266,6 +268,59 @@ def synth_cartesia(text, output_path, config):
     raise TTSError(f"Cartesia error: {last}", "cartesia")
 
 
+GOOGLE_TTS_DEFAULT_CHAR_LIMIT = 1_000_000  # Chirp3-HD's monthly free allowance
+_usage_lock = threading.Lock()
+
+
+def _google_tts_usage_path():
+    from secure_paths import DATA_DIR
+
+    return os.path.join(str(DATA_DIR), "google_tts_usage.json")
+
+
+def google_tts_usage(now=None):
+    """{"month": "YYYY-MM", "chars": int} for the current calendar month.
+
+    Google's free tier resets monthly and a budget alert does NOT stop
+    spending -- it only emails after the fact. So the only thing that
+    actually prevents a surprise bill is refusing to send the request, which
+    means keeping our own count.
+    """
+    month = (now or datetime.now(timezone.utc)).strftime("%Y-%m")
+    try:
+        with open(_google_tts_usage_path(), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if data.get("month") == month:
+            return {"month": month, "chars": int(data.get("chars") or 0)}
+    except (OSError, ValueError, TypeError):
+        pass
+    return {"month": month, "chars": 0}  # missing/corrupt/stale -> new month
+
+
+def _google_tts_record(chars, now=None):
+    usage = google_tts_usage(now)
+    usage["chars"] += max(0, int(chars))
+    try:
+        path = _google_tts_usage_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(usage, handle)
+    except OSError:
+        pass  # a counter we can't persist must never break the render
+    return usage
+
+
+def _google_tts_char_limit(config):
+    raw = str(config.get("google_tts_monthly_char_limit") or "").strip()
+    if not raw:
+        return GOOGLE_TTS_DEFAULT_CHAR_LIMIT
+    try:
+        # 0 (or negative) is the explicit "no cap, I accept billing" opt-out.
+        return max(0, int(float(raw)))
+    except ValueError:
+        return GOOGLE_TTS_DEFAULT_CHAR_LIMIT
+
+
 def synth_google_cloud_tts(text, output_path, config):
     """Google Cloud Text-to-Speech (Chirp3-HD / WaveNet / Standard voices) --
     a different API from "Gemini TTS via Google Cloud" above
@@ -286,6 +341,18 @@ def synth_google_cloud_tts(text, output_path, config):
             "No Vertex AI project ID configured (Settings -> AI Provider -> Google Cloud)",
             "google_cloud_tts",
         )
+
+    limit = _google_tts_char_limit(config)
+    if limit:
+        with _usage_lock:
+            used = google_tts_usage()["chars"]
+            if used + len(text) > limit:
+                raise TTSError(
+                    f"Google Cloud TTS monthly character cap reached "
+                    f"({used:,}/{limit:,} this month). Raise or clear the limit in "
+                    f"Settings -> Voice, or let the fallback chain take over.",
+                    "google_cloud_tts",
+                )
 
     voice_name = _resolve_voice("google_cloud_tts", config)
     language_code = "-".join(voice_name.split("-")[:2]) or "en-US"
@@ -320,6 +387,9 @@ def synth_google_cloud_tts(text, output_path, config):
         raise TTSError("Audio response exceeded 25 MB", "google_cloud_tts")
     with open(output_path, "wb") as handle:
         handle.write(audio_bytes)
+    # Only bill ourselves for characters Google actually synthesized.
+    with _usage_lock:
+        _google_tts_record(len(text))
 
 
 def synth_deepgram(text, output_path, config):

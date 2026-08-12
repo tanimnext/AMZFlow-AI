@@ -113,6 +113,7 @@
                         <label class="switch"><input type="checkbox" id="tts_fallback_enabled"><span class="slider"></span></label>
                     </div>
                     <p class="hint mb-2">If the primary voice provider fails, these are tried next, in the order below -- drag to reorder. Any other provider with a saved key is also tried automatically after this list; Edge TTS (free, no key) is always the final fallback.</p>
+                    <p class="hint mb-2" style="color:var(--warn-600, var(--text-faint))"><b>Note:</b> a fallback speaks in <i>its own</i> configured voice -- voice IDs aren't shared between providers -- so a rescued segment will not match the rest of the video. Set each fallback provider's voice above to the closest match you can.</p>
                     <div id="ttsChainRows" class="space-y-2 mb-2"></div>
                     <textarea id="tts_chain" class="hidden" aria-hidden="true"></textarea>
                     <button type="button" id="ttsChainAddBtn" class="btn btn-sm w-full">+ Add fallback voice provider</button>

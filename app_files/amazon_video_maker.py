@@ -118,6 +118,7 @@ CARTESIA_MODEL_ID = "sonic-english"
 DEEPGRAM_API_KEY = ""
 DEEPGRAM_VOICE_ID = "aura-2-thalia-en"
 GOOGLE_TTS_VOICE_ID = "en-US-Chirp3-HD-Sulafat"
+GOOGLE_TTS_MONTHLY_CHAR_LIMIT = "1000000"
 # AndrewMultilingualNeural sounds noticeably more natural than the plain
 # (non-multilingual) neural voices, and a neutral rate/pitch avoids the
 # robotic resampling artifact a pitch shift introduces on neural TTS output.
@@ -228,7 +229,7 @@ def load_settings_from_external():
     global VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON, VERTEX_LLM_MODEL, VERTEX_TTS_MODEL
     global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW
     global USE_YEAR, USE_BEST, YEAR
-    global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, DEEPGRAM_API_KEY, DEEPGRAM_VOICE_ID, GOOGLE_TTS_VOICE_ID, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
+    global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, DEEPGRAM_API_KEY, DEEPGRAM_VOICE_ID, GOOGLE_TTS_VOICE_ID, GOOGLE_TTS_MONTHLY_CHAR_LIMIT, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
     global GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, GEMINI_VOICE_STYLE
     global GEMINI_VOICE_PACE, GEMINI_VOICE_ENERGY, GEMINI_VOICE_WARMTH
     global GEMINI_VOICE_ACCENT, GEMINI_VOICE_INSTRUCTION, GEMINI_PRONUNCIATIONS
@@ -310,6 +311,7 @@ def load_settings_from_external():
                 DEEPGRAM_API_KEY = s.get('deepgram_api_key', DEEPGRAM_API_KEY)
                 DEEPGRAM_VOICE_ID = s.get('deepgram_voice_id', DEEPGRAM_VOICE_ID)
                 GOOGLE_TTS_VOICE_ID = s.get('google_tts_voice_id', GOOGLE_TTS_VOICE_ID)
+                GOOGLE_TTS_MONTHLY_CHAR_LIMIT = s.get('google_tts_monthly_char_limit', GOOGLE_TTS_MONTHLY_CHAR_LIMIT)
                 EDGE_VOICE = s.get('edge_voice', EDGE_VOICE)
                 EDGE_RATE = s.get('edge_rate', EDGE_RATE)
                 EDGE_PITCH = s.get('edge_pitch', EDGE_PITCH)
@@ -1849,43 +1851,16 @@ def _provider_config(provider):
 
 
 def _build_llm_chain():
-    """Primary provider (LLM_SERVICE) first, then:
-    1. If the user opted in via llm_fallback_enabled, additional
-       'provider|model' lines from LLM_CHAIN_RAW (explicit order/model choice).
-    2. Automatically, every OTHER provider that already has a usable key/
-       credential saved in Settings, in _LLM_PROVIDERS order. A render used
-       to hard-fail every single ASIN the moment the one configured provider
-       had a bad key, hit a quota, or (Vertex AI) wasn't fully set up yet --
-       even though the user often has a second provider's key sitting right
-       there in Settings, unused. This doesn't touch the primary provider
-       choice; it only decides what to try next if that one is unusable."""
-    primary = LLM_SERVICE if LLM_SERVICE in _LLM_PROVIDERS else "longcat"
-    seen = {primary}
-    keys, model, endpoint = _provider_config(primary)
-    chain = [{"provider": primary, "model": model, "api_keys": keys, "endpoint": endpoint}]
-
-    if LLM_FALLBACK_ENABLED and LLM_CHAIN_RAW:
-        for line in LLM_CHAIN_RAW.split('\n'):
-            line = line.strip()
-            if not line or '|' not in line:
-                continue
-            prov, _, mdl = line.partition('|')
-            prov = prov.strip().lower()
-            mdl = mdl.strip()
-            if prov in seen or prov not in _LLM_PROVIDERS:
-                continue
-            seen.add(prov)
-            keys, default_model, endpoint = _provider_config(prov)
-            chain.append({"provider": prov, "model": mdl or default_model, "api_keys": keys, "endpoint": endpoint})
-
-    for prov in _LLM_PROVIDERS:
-        if prov in seen:
-            continue
-        seen.add(prov)
-        keys, default_model, endpoint = _provider_config(prov)
-        if keys:  # only add providers that actually have a key/credential saved
-            chain.append({"provider": prov, "model": default_model, "api_keys": keys, "endpoint": endpoint})
-    return chain
+    """Thin wrapper over the shared llm_client.build_chain -- see there for
+    the ordering rules. Kept as a named function because the tests and the
+    call sites below read better against it."""
+    return llm_client.build_chain(
+        LLM_SERVICE,
+        _provider_config,
+        fallback_enabled=LLM_FALLBACK_ENABLED,
+        chain_raw=LLM_CHAIN_RAW,
+        order=_LLM_PROVIDERS,
+    )
 
 
 def call_llm_local(prompt):
@@ -2364,6 +2339,7 @@ def _current_tts_config(voice=None):
         "deepgram_api_key": DEEPGRAM_API_KEY,
         "deepgram_voice_id": DEEPGRAM_VOICE_ID,
         "google_tts_voice_id": GOOGLE_TTS_VOICE_ID,
+        "google_tts_monthly_char_limit": GOOGLE_TTS_MONTHLY_CHAR_LIMIT,
         # Gemini TTS rotates through every configured key (matching the LLM
         # path); v6 used GEMINI_API_KEYS[0] only, so a rate-limited first key
         # failed the whole render with the rest of the keys sitting unused.
@@ -2449,7 +2425,35 @@ def _build_tts_chain():
     return chain
 
 
-async def _tts_provider_once(text, output_path, voice=None):
+_PERMANENT_TTS_ERROR_MARKERS = (
+    "api key is required",
+    "key is required",
+    "not configured",
+    "no vertex ai",
+    "monthly character cap",
+    "http 401",
+    "401",
+    "http 403",
+    "403",
+    "invalid api key",
+    "unauthorized",
+)
+
+
+def _tts_error_is_permanent(exc):
+    """Whether retrying this provider within the same run is pointless.
+
+    A missing/rejected credential or a hit quota cap fails identically every
+    time, so re-walking it on all four _tts_with_retry attempts just adds
+    latency to a render that is already in trouble. Rate limits, timeouts
+    and 5xx are deliberately NOT matched here -- those are exactly the cases
+    a retry exists for.
+    """
+    message = str(exc).lower()
+    return any(marker in message for marker in _PERMANENT_TTS_ERROR_MARKERS)
+
+
+async def _tts_provider_once(text, output_path, voice=None, unusable=None):
     """Tries _build_tts_chain() in order, returning on the first provider
     that produces output. `voice` (a per-call override, e.g. a rank-slide
     voice pick) only applies to the PRIMARY provider -- a voice id from one
@@ -2472,6 +2476,14 @@ async def _tts_provider_once(text, output_path, voice=None):
     (Edge, always the final entry, would have to itself be unreachable).
     """
     chain = _build_tts_chain()
+    if unusable:
+        # Providers already proven unusable this run (bad/missing credential,
+        # quota cap) are skipped instead of re-failing identically on every
+        # retry. Never drop the whole chain, though -- if that filter would
+        # empty it, fall through to the original chain so the caller still
+        # gets a real error rather than "no provider available".
+        filtered = [p for p in chain if p not in unusable]
+        chain = filtered or chain
     last_err = None
     for i, provider in enumerate(chain):
         is_primary = provider == chain[0]
@@ -2495,6 +2507,8 @@ async def _tts_provider_once(text, output_path, voice=None):
             return
         except Exception as e:
             last_err = e
+            if unusable is not None and _tts_error_is_permanent(e):
+                unusable.add(provider)
             if i < len(chain) - 1:
                 print(f"{provider} TTS Error: {e}")
                 print(f"[FALLBACK] Switching to {chain[i + 1]} TTS for this segment...")
@@ -2527,11 +2541,15 @@ async def _tts_with_retry(text, output_path, voice, label, attempts=4):
         return output_path
 
     last_reason = "unknown"
+    # Scoped to this chunk: a provider whose credential is missing/rejected
+    # is skipped on the remaining attempts instead of failing identically
+    # four times over.
+    unusable = set()
     for attempt in range(1, attempts + 1):
         try:
             print(f"[AUDIO][START] {label} attempt {attempt}/{attempts}")
             async with _TtsSlot():
-                await _tts_provider_once(text, output_path, voice)
+                await _tts_provider_once(text, output_path, voice, unusable=unusable)
         except Exception as e:
             last_reason = f"exception: {e}"
         else:

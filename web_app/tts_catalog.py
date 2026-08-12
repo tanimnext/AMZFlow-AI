@@ -66,6 +66,7 @@ PROVIDERS = {
         "supports_rate": False,
         "supports_pitch": False,
         "director": False,
+        "testable": False,
         "paid": False,
     },
     "edge": {
@@ -80,6 +81,7 @@ PROVIDERS = {
         "supports_rate": True,
         "supports_pitch": True,
         "director": False,
+        "testable": False,
         "paid": False,
     },
     "gemini": {
@@ -94,6 +96,7 @@ PROVIDERS = {
         "supports_rate": False,
         "supports_pitch": False,
         "director": True,
+        "testable": True,
         "paid": False,
     },
     "elevenlabs": {
@@ -108,6 +111,7 @@ PROVIDERS = {
         "supports_rate": False,
         "supports_pitch": False,
         "director": False,
+        "testable": True,
         "paid": True,
     },
     "cartesia": {
@@ -122,6 +126,7 @@ PROVIDERS = {
         "supports_rate": False,
         "supports_pitch": False,
         "director": False,
+        "testable": True,
         "paid": True,
     },
     "ai33pro": {
@@ -136,6 +141,7 @@ PROVIDERS = {
         "supports_rate": False,
         "supports_pitch": False,
         "director": False,
+        "testable": True,
         "paid": True,
     },
     "google_cloud_tts": {
@@ -159,6 +165,19 @@ PROVIDERS = {
         "supports_rate": False,
         "supports_pitch": False,
         "director": False,
+        "credential_fields": [
+            "vertex_project_id",
+            "vertex_location",
+            "vertex_service_account_private_key",
+        ],
+        "extra_fields": [
+            {
+                "field": "google_tts_monthly_char_limit",
+                "label": "Monthly character cap (0 = no cap)",
+                "placeholder": "1000000",
+            },
+        ],
+        "testable": True,
         "paid": False,
     },
     "deepgram": {
@@ -173,6 +192,7 @@ PROVIDERS = {
         "supports_rate": False,
         "supports_pitch": False,
         "director": False,
+        "testable": True,
         "paid": True,
     },
     "vertex_gemini": {
@@ -199,6 +219,12 @@ PROVIDERS = {
         "supports_rate": False,
         "supports_pitch": False,
         "director": True,
+        "credential_fields": [
+            "vertex_project_id",
+            "vertex_location",
+            "vertex_service_account_private_key",
+        ],
+        "testable": True,
         "paid": False,
     },
 }
@@ -409,6 +435,7 @@ def custom_registry_entries(settings: dict) -> list:
                 "supportsPitch": False,
                 "director": False,
                 "paid": True,
+                "testable": True,
                 "custom": True,
             }
         )
@@ -519,6 +546,15 @@ def public_registry(enabled: dict | None = None, custom: list | None = None) -> 
                 "supportsRate": spec["supports_rate"],
                 "supportsPitch": spec["supports_pitch"],
                 "director": spec["director"],
+                # Not the same as needsKey: vertex_gemini/google_cloud_tts
+                # borrow the AI Provider section's service-account credential,
+                # so they have no key field of their own but are still very
+                # much worth testing before a render.
+                "testable": spec.get("testable", spec["needs_key"]),
+                # Settings ids this provider authenticates with but does not
+                # render itself (they live in the AI Provider panel). Sent
+                # with test/preview so both exercise the on-screen values.
+                "credentialFields": spec.get("credential_fields", []),
                 "paid": spec["paid"],
                 "custom": False,
                 "extraFields": spec.get("extra_fields", []),

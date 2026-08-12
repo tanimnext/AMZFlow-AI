@@ -310,6 +310,16 @@
                     </div>`
                     )
                     .join("") || `<p class="hint">No provider configured.</p>`;
+                if ((result.results || []).some((r) => r.ok)) {
+                    // Only the fields this test actually exercised -- see
+                    // the note on unsavedKeys().
+                    const spec = llmSpec($("#llm_service")?.value);
+                    warnIfUnsaved([
+                        "llm_service", "llm_chain", "llm_fallback_enabled",
+                        spec?.keyField, spec?.modelField, spec?.endpointField,
+                        ...(spec?.extraFields || []).map((f) => f.field),
+                    ].filter(Boolean));
+                }
             } catch (err) {
                 resultBox.innerHTML = `<p style="color:var(--danger-600)">${escapeHtml(err.message)}</p>`;
             }
@@ -404,7 +414,7 @@
                 <span class="hint">One entry per line using term=pronunciation.</span></label>`);
         }
         parts.push(`<div class="flex gap-2 mt-2">
-            ${spec.needsKey ? `<button type="button" class="btn flex-1" id="ttsTestBtn">Test Connection</button>` : ""}
+            ${(spec.testable ?? spec.needsKey) ? `<button type="button" class="btn flex-1" id="ttsTestBtn">Test Connection</button>` : ""}
             <button type="button" class="btn btn-primary flex-1" id="ttsPreviewBtn">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 0 1 0 1.971l-11.54 6.347a1.125 1.125 0 0 1-1.667-.985V5.653Z"/></svg>
                 Preview Voice</button>
@@ -497,6 +507,46 @@
         }
     }
 
+    // Credentials a provider authenticates with but doesn't render itself
+    // (vertex_gemini / google_cloud_tts borrow the AI Provider panel's
+    // service-account fields). Without this, Test and Preview silently
+    // exercised the last SAVED credential while the user was looking at a
+    // freshly pasted one on screen.
+    function addCredentialFields(payload, spec) {
+        (spec.credentialFields || []).forEach((field) => {
+            const el = document.getElementById(field);
+            if (el && el.value) payload[field] = el.value;
+        });
+    }
+
+    // Test/Preview run against the live form, but a render runs in a
+    // separate process reading the SAVED settings.json -- so a green
+    // "CONNECTED" has said nothing about whether the next render would
+    // work. Scoped deliberately to the keys that were just tested: a
+    // whole-form diff false-positives on selects whose saved value isn't in
+    // an async-loaded catalog yet, and a warning that cries wolf every time
+    // is one the user learns to ignore.
+    function unsavedKeys(keys) {
+        return keys.filter((key) => {
+            if (!(key in SETTINGS)) return false;
+            const el = document.getElementById(key);
+            if (!el) return false;
+            const live = el.type === "checkbox" ? el.checked : el.value;
+            const saved = SETTINGS[key];
+            if (typeof live === "boolean") return live !== !!saved;
+            return String(live ?? "") !== String(saved ?? "");
+        });
+    }
+
+    function warnIfUnsaved(keys) {
+        if (!unsavedKeys(keys).length) return;
+        toast(
+            "Tested the values on screen -- they are not saved yet. Click Save Changes, or the next render will use the old ones.",
+            "warn",
+            7000
+        );
+    }
+
     async function previewTts(button, spec) {
         const payload = { service: spec.id };
         if (spec.keyField) payload[spec.keyField] = document.getElementById(spec.keyField)?.value;
@@ -506,6 +556,7 @@
         }
         if (spec.modelField) payload[spec.modelField] = document.getElementById(spec.modelField)?.value;
         (spec.extraFields || []).forEach((f) => { payload[f.field] = document.getElementById(f.field)?.value; });
+        addCredentialFields(payload, spec);
         if (spec.supportsRate) payload.edge_rate = document.getElementById("edge_rate")?.value;
         if (spec.supportsPitch) payload.edge_pitch = document.getElementById("edge_pitch")?.value;
         if (spec.director) {
@@ -532,7 +583,9 @@
         } else {
             if (spec.keyField) payload[spec.keyField] = document.getElementById(spec.keyField)?.value;
             if (spec.modelField) payload[spec.modelField] = document.getElementById(spec.modelField)?.value;
+            if (spec.voiceField) payload[spec.voiceField] = document.getElementById(spec.voiceField)?.value;
             (spec.extraFields || []).forEach((f) => { payload[f.field] = document.getElementById(f.field)?.value; });
+            addCredentialFields(payload, spec);
             if (spec.director) {
                 ["gemini_voice_style", "gemini_voice_pace", "gemini_voice_energy", "gemini_voice_warmth",
                  "gemini_voice_accent", "gemini_voice_instruction", "gemini_pronunciations"].forEach((id) => {
@@ -552,6 +605,7 @@
                     </div>`;
                 }
                 toast(result.success ? `Connected (${result.ms}ms)` : `Test failed: ${result.error}`, result.success ? "ok" : "error", 5000);
+                if (result.success) warnIfUnsaved(Object.keys(payload).filter((k) => k !== "service"));
             } catch (err) {
                 if (resultBox) resultBox.innerHTML = `<p style="color:var(--danger-600)">${escapeHtml(err.message)}</p>`;
                 toast(`Test failed: ${err.message}`, "error", 5000);

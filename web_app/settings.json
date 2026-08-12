@@ -77,6 +77,7 @@
     "deepgram_api_key": "",
     "deepgram_voice_id": "aura-2-thalia-en",
     "google_tts_voice_id": "en-US-Chirp3-HD-Sulafat",
+    "google_tts_monthly_char_limit": "1000000",
     "thumb_text_top": "#00ccff",
     "thumb_text_bot": "#fbff00",
     "thumb_text_bg_color": "#000000",

@@ -209,41 +209,17 @@ def _provider_config(provider):
 
 
 def _build_llm_chain():
-    """Same chain-building logic as amazon_video_maker.py's _build_llm_chain
-    -- duplicated here only because these are two separate OS processes
-    (this module has no import-time dependency on that one), not because
-    the LOGIC is duplicated; both call into the same llm_client.call_chain.
-    Primary provider first, then the manual chain (if opted in), then --
-    same as the video pipeline -- every OTHER provider that already has a
-    saved key/credential, automatically, so metadata generation doesn't
-    fall back to Longcat specifically just because it's first in the tuple."""
-    primary = LLM_SERVICE if LLM_SERVICE in _LLM_PROVIDERS else "longcat"
-    seen = {primary}
-    keys, model, endpoint = _provider_config(primary)
-    chain = [{"provider": primary, "model": model, "api_keys": keys, "endpoint": endpoint}]
-
-    if LLM_FALLBACK_ENABLED and LLM_CHAIN_RAW:
-        for line in LLM_CHAIN_RAW.split('\n'):
-            line = line.strip()
-            if not line or '|' not in line:
-                continue
-            prov, _, mdl = line.partition('|')
-            prov = prov.strip().lower()
-            mdl = mdl.strip()
-            if prov in seen or prov not in _LLM_PROVIDERS:
-                continue
-            seen.add(prov)
-            keys, default_model, endpoint = _provider_config(prov)
-            chain.append({"provider": prov, "model": mdl or default_model, "api_keys": keys, "endpoint": endpoint})
-
-    for prov in _LLM_PROVIDERS:
-        if prov in seen:
-            continue
-        seen.add(prov)
-        keys, default_model, endpoint = _provider_config(prov)
-        if keys:
-            chain.append({"provider": prov, "model": default_model, "api_keys": keys, "endpoint": endpoint})
-    return chain
+    """Thin wrapper over the shared llm_client.build_chain. This file used to
+    carry its own copy of the ordering logic, which is exactly how it ended
+    up not knowing "vertex_gemini" existed and silently routing every
+    metadata call to longcat instead of the user's actual choice."""
+    return llm_client.build_chain(
+        LLM_SERVICE,
+        _provider_config,
+        fallback_enabled=LLM_FALLBACK_ENABLED,
+        chain_raw=LLM_CHAIN_RAW,
+        order=_LLM_PROVIDERS,
+    )
 
 
 def call_llm(prompt):
