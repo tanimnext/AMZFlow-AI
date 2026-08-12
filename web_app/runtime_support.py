@@ -4,12 +4,33 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 
 def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
+
+
+def quiet_subprocess_kwargs() -> dict:
+    """Keyword args that stop a child process from opening a console window.
+
+    The frozen Windows app is built --windowed, so it has no console of its
+    own; every subprocess it spawns (ffmpeg, ffprobe, the render worker)
+    therefore gets a brand-new console window. One render fires hundreds of
+    those, and each one flashes on screen AND steals keyboard focus, which
+    is what makes the machine unusable mid-render. CREATE_NO_WINDOW keeps
+    them headless. No-op off Windows.
+    """
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+        "startupinfo": startupinfo,
+    }
 
 
 def resource_dir() -> Path:

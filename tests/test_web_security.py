@@ -353,6 +353,15 @@ class MachineIdTests(unittest.TestCase):
 
         cls.module = app_module
 
+    def setUp(self):
+        # get_machine_id() is lru_cached (it is called on ~every request and
+        # shells out to wmic on Windows). Each test here patches a different
+        # platform, so the cache has to be dropped between them or the second
+        # test just replays the first one's answer.
+        self.module.get_machine_id.cache_clear()
+
+    tearDown = setUp
+
     def test_macos_uses_stable_hardware_uuid_instead_of_network_guess(self):
         fake_ioreg_output = (
             '+-o Mac : <class IOPlatformExpertDevice>\n'

@@ -23,6 +23,7 @@ import unicodedata
 
 import requests
 
+from runtime_support import quiet_subprocess_kwargs
 from voice_config import build_gemini_tts_prompt, normalize_gemini_tts_settings
 
 HTTP_TIMEOUT = 45
@@ -67,7 +68,10 @@ def normalize_for_speech(text: str) -> str:
 
 def _run_ffmpeg(args, timeout=120):
     try:
-        subprocess.run(args, check=True, capture_output=True, timeout=timeout)
+        subprocess.run(
+            args, check=True, capture_output=True, timeout=timeout,
+            **quiet_subprocess_kwargs(),
+        )
     except subprocess.TimeoutExpired as exc:
         raise TTSError(f"ffmpeg timed out after {timeout}s") from exc
     except subprocess.CalledProcessError as exc:

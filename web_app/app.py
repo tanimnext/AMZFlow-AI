@@ -1,4 +1,5 @@
 import os
+import functools
 import json
 import subprocess
 import tempfile
@@ -21,9 +22,9 @@ from PIL import Image
 from datetime import datetime
 
 try:
-    from .runtime_support import is_frozen, resolve_binary, resource_dir
+    from .runtime_support import is_frozen, quiet_subprocess_kwargs, resolve_binary, resource_dir
 except ImportError:
-    from runtime_support import is_frozen, resolve_binary, resource_dir
+    from runtime_support import is_frozen, quiet_subprocess_kwargs, resolve_binary, resource_dir
 
 # --- CONFIGURATION TOGGLES ---
 ENABLE_ELEVENLABS = True  # Set to False or True to disable/ enable ElevenLabs TTS option
@@ -406,15 +407,29 @@ def mark_video_uploaded(keyword, video_id, processing_status="processing", accou
     }
     save_uploaded_videos(uploaded)
 
+@functools.lru_cache(maxsize=1)
 def get_machine_id():
     """পিসির ইউনিক হার্ডওয়্যার আইডি বের করে (Windows এ একাধিক পদ্ধতিতে চেষ্টা করবে)"""
+    # Cached for the life of the process: the hardware ID cannot change while
+    # the app is running, but this is called from check_user_license() on
+    # effectively every request (the session cache only holds 10s), so on
+    # Windows it was re-shelling out to `wmic` -- 1-3 seconds each -- dozens
+    # of times during a single render.
+    #
+    # The order of the Windows probes below is deliberately UNCHANGED.
+    # Whichever one answers first IS the machine ID already stored against
+    # the license, so reordering them would hand back a different ID and
+    # lock out every currently-activated Windows user -- the same way the
+    # missing macOS branch did after a reboot.
     try:
         import subprocess
         if os.name == 'nt': # Windows
             # প্রথম চেষ্টা: WMIC UUID
             try:
-                cmd = 'wmic csproduct get uuid'
-                uuid_str = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().split('\n')
+                uuid_str = subprocess.check_output(
+                    ['wmic', 'csproduct', 'get', 'uuid'], stderr=subprocess.DEVNULL,
+                    **quiet_subprocess_kwargs(),
+                ).decode().split('\n')
                 if len(uuid_str) > 1 and uuid_str[1].strip():
                     return uuid_str[1].strip()
             except: pass
@@ -431,8 +446,10 @@ def get_machine_id():
 
             # তৃতীয় চেষ্টা: Disk Serial
             try:
-                cmd = 'wmic diskdrive get serialnumber'
-                serial = subprocess.check_output(cmd, shell=True).decode().split('\n')[1].strip()
+                serial = subprocess.check_output(
+                    ['wmic', 'diskdrive', 'get', 'serialnumber'], stderr=subprocess.DEVNULL,
+                    **quiet_subprocess_kwargs(),
+                ).decode().split('\n')[1].strip()
                 if serial: return f"DISK-{serial}"
             except: pass
 
@@ -447,7 +464,7 @@ def get_machine_id():
             try:
                 output = subprocess.check_output(
                     ['ioreg', '-rd1', '-c', 'IOPlatformExpertDevice'],
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, **quiet_subprocess_kwargs(),
                 ).decode()
                 match = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', output)
                 if match:
@@ -1199,11 +1216,12 @@ def run_process():
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1, 
+                bufsize=1,
                 universal_newlines=True,
                 encoding='utf-8',
                 errors='replace',
-                env=env
+                env=env,
+                **quiet_subprocess_kwargs(),
             )
             
             for line in iter(process.stdout.readline, ''):

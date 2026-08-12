@@ -44,7 +44,7 @@ import music_manager
 from caption_utils import build_srt
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web_app"))
 import tts_engine
-from runtime_support import kokoro_files, resolve_binary
+from runtime_support import kokoro_files, quiet_subprocess_kwargs, resolve_binary
 from product_core import (
     atomic_json,
     format_youtube_text,
@@ -490,19 +490,44 @@ AUDIO_SAMPLE_RATE = 48000
 TTS_CACHE_VERSION = 3
 
 
+# (path, size, mtime_ns) -> duration. Probing is a process spawn, and the
+# same file gets probed repeatedly -- slide_duration() alone runs once during
+# timeline planning and again in the renderer for every slide, and the audio
+# sanity checks probe each part again. On Windows every spawn also pays for
+# Defender scanning the ~100 MB bundled ffprobe.exe, so the repeats were a
+# real chunk of the wall clock. Keyed on size+mtime so a rewritten file
+# (normalization pass, retry) re-probes instead of returning a stale value.
+_DURATION_CACHE = {}
+_DURATION_CACHE_LOCK = threading.Lock()
+
+
 def get_audio_duration(file_path):
     """Get duration of audio file using ffprobe."""
     if not os.path.exists(file_path):
         return 0
+    try:
+        stat = os.stat(file_path)
+        cache_key = (str(file_path), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        cache_key = None
+    if cache_key is not None:
+        with _DURATION_CACHE_LOCK:
+            if cache_key in _DURATION_CACHE:
+                return _DURATION_CACHE[cache_key]
     cmd = [
         FFPROBE_BIN, "-v", "error", "-show_entries", "format=duration",
         "-of", "default=noprint_wrappers=1:nokey=1", file_path
     ]
     try:
         result = subprocess.run(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20,
+            **quiet_subprocess_kwargs(),
         )
-        return float(result.stdout.strip())
+        duration = float(result.stdout.strip())
+        if cache_key is not None:
+            with _DURATION_CACHE_LOCK:
+                _DURATION_CACHE[cache_key] = duration
+        return duration
     except (subprocess.SubprocessError, ValueError, OSError) as e:
         # Was 3.0 (a fake non-zero duration). That let a genuinely broken/
         # unreadable audio file sail through duration-based sanity checks
@@ -611,6 +636,7 @@ def run_ffmpeg(cmd_args):
         subprocess.run(
             cmd_args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='replace', timeout=FFMPEG_TIMEOUT_SECONDS,
+            **quiet_subprocess_kwargs(),
         )
     except subprocess.CalledProcessError as e:
         print(f"FFmpeg Error: {e.stderr}")
@@ -1083,7 +1109,13 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
             
             cmd.extend(["-stream_loop", "-1", "-i", video_path]) # Index 0
             for img in image_paths:
-                cmd.extend(["-loop", "1", "-i", img]) # Indices 1 to N
+                # Deliberately NOT "-loop 1": these images feed zoompan, which
+                # emits its `d` frames for EVERY input frame it receives. With
+                # -loop 1 a 5s image handed zoompan ~125 input frames and it
+                # computed 125 x d frames, then threw ~99% of them away at the
+                # trim -- one 5s slideshow segment took ~55s instead of ~0.4s.
+                # A single input frame is all zoompan needs.
+                cmd.extend(["-i", img]) # Indices 1 to N
             
             sequence = []
             curr_v_time = 0
@@ -1166,7 +1198,10 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
                 res_w, res_h = output_resolution()
                 zoom_target_w, zoom_target_h = zoom_working_resolution()
                 for i, img in enumerate(image_paths):
-                    cmd.extend(["-loop", "1", "-t", f"{img_dur:.3f}", "-i", img])
+                    # One input frame only -- see the INTERSPERSED MODE note
+                    # above: -loop 1 makes zoompan recompute its whole `d`
+                    # frame run for every input frame it is handed.
+                    cmd.extend(["-i", img])
                     frames = int(img_dur * 25) + 25
                     zoom_filter = (
                         f"scale={zoom_target_w}:{zoom_target_h}:force_original_aspect_ratio=decrease,pad={zoom_target_w}:{zoom_target_h}:(ow-iw)/2:(oh-ih)/2:white,setsar=1,"
@@ -1222,7 +1257,11 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
                 f"zoompan=z='zoom+0.0004':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={res_w}x{res_h}:fps=25,"
                 f"setsar=1"
             )
-            cmd.extend(["-loop", "1", "-t", f"{img_dur:.3f}", "-i", img])
+            # One input frame only -- see the INTERSPERSED MODE note above:
+            # -loop 1 makes zoompan recompute its whole `d` frame run for
+            # every input frame it is handed (this was the single biggest
+            # cost in the whole render).
+            cmd.extend(["-i", img])
             filter_parts.append(f"[{i}:v]{zoom_filter}[v{i}]")
         
         # Cross-fade transitions (xfade)

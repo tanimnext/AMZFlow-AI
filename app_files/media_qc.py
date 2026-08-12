@@ -8,6 +8,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+try:
+    from runtime_support import quiet_subprocess_kwargs
+except ImportError:  # pragma: no cover - source layout without web_app on sys.path
+    def quiet_subprocess_kwargs() -> dict:
+        return {}
+
 
 def probe_media(path: str | Path, ffprobe_bin: str = "ffprobe") -> dict[str, Any]:
     result = subprocess.run(
@@ -25,6 +31,7 @@ def probe_media(path: str | Path, ffprobe_bin: str = "ffprobe") -> dict[str, Any
         capture_output=True,
         text=True,
         timeout=30,
+        **quiet_subprocess_kwargs(),
     )
     payload = json.loads(result.stdout)
     streams = payload.get("streams", [])
@@ -70,6 +77,7 @@ def detect_silences(
         capture_output=True,
         text=True,
         timeout=120,
+        **quiet_subprocess_kwargs(),
     )
     # This is the one QC signal specifically meant to catch missing/broken
     # narration. Without check=True, a failed probe (corrupt file, missing
