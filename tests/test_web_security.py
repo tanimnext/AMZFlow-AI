@@ -397,6 +397,52 @@ class WebSecurityTests(unittest.TestCase):
         for key in ("llm_chain", "tts_chain", "llm_fallback_enabled", "tts_fallback_enabled"):
             self.assertIn(key, settings_template)
 
+    def test_save_handler_scopes_chain_row_queries_per_chain(self):
+        # ".chain-row" matches BOTH the LLM and the voice fallback rows, but
+        # only LLM rows contain a ".chain-model" input. An unscoped
+        # `$$(".chain-row")` + `.querySelector(".chain-model").value` threw a
+        # TypeError before the save request was ever built, so Save Changes
+        # silently did nothing for anyone with a voice fallback configured.
+        js = self.client.get("/static/js/settings_page.js").data.decode()
+        self.assertNotIn('$$(".chain-row")', js)
+        self.assertIn('$$("#llmChainRows .chain-row")', js)
+        self.assertIn('$$("#ttsChainRows .chain-row")', js)
+
+    def test_clearing_a_stored_secret_is_possible(self):
+        # Blank alone means "keep the stored value" (the create page saves
+        # from a redacted load), so removing a saved credential needs the
+        # explicit signal -- otherwise a service-account JSON can never be
+        # deleted once saved.
+        self.module.save_settings({"vertex_service_account_private_key": '{"k":1}'})
+        self.client.post(
+            "/save_settings",
+            json={"vertex_service_account_private_key": ""},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        kept = self.client.get("/get_settings_full").get_json()
+        self.assertEqual(kept["vertex_service_account_private_key"], '{"k":1}')
+
+        self.client.post(
+            "/save_settings",
+            json={
+                "vertex_service_account_private_key": "",
+                "__cleared_secrets__": ["vertex_service_account_private_key"],
+            },
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        cleared = self.client.get("/get_settings_full").get_json()
+        self.assertEqual(cleared["vertex_service_account_private_key"], "")
+
+    def test_cleared_secrets_cannot_blank_a_non_secret_setting(self):
+        before = self.client.get("/get_settings_full").get_json()["intro_text"]
+        self.client.post(
+            "/save_settings",
+            json={"__cleared_secrets__": ["intro_text"]},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        after = self.client.get("/get_settings_full").get_json()["intro_text"]
+        self.assertEqual(after, before)
+
     def test_security_headers_are_present(self):
         response = self.client.get("/get_settings")
         self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")

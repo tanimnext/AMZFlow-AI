@@ -147,6 +147,7 @@ MODEL_FIELDS = {
     "elevenlabs": "elevenlabs_model_id",
     "cartesia": "cartesia_model_id",
     "ai33pro": "ai33pro_model_id",
+    "deepgram": "deepgram_model_id",
 }
 
 DEFAULT_MODELS = {
@@ -399,7 +400,9 @@ def synth_deepgram(text, output_path, config):
     keys = _split_keys(config.get("deepgram_api_key"))
     if not keys:
         raise TTSError("A Deepgram API key is required", "deepgram")
-    model = _resolve_voice("deepgram", config)
+    # One value, two settings fields: an explicit Model wins, otherwise the
+    # Voice picker (which lists the identical catalogue) supplies it.
+    model = str(config.get("deepgram_model_id") or "").strip() or _resolve_voice("deepgram", config)
     last = ""
     for key in keys:
         resp = requests.post(

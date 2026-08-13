@@ -37,6 +37,17 @@ VERTEX_LLM_MODEL = "gemini-2.5-flash"
 
 LLM_FALLBACK_ENABLED = False
 LLM_CHAIN_RAW = ""
+LLM_TIMEOUT_SECONDS = 120
+
+
+def _positive_int(value, fallback):
+    """Settings arrive as strings from the form; a blank or junk
+    timeout must not crash the render, it must fall back."""
+    try:
+        parsed = int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
 
 USE_YEAR = True
 USE_BEST = True
@@ -55,7 +66,7 @@ def load_settings():
     global LONGCAT_API_KEYS, LONGCAT_ENDPOINT, LONGCAT_MODEL, USE_YEAR, USE_BEST, YEAR
     global LLM_SERVICE, GEMINI_API_KEYS, GEMINI_MODEL, OPENROUTER_API_KEYS, OPENROUTER_MODEL, OPENAI_API_KEYS, OPENAI_MODEL, DEEPSEEK_API_KEYS, DEEPSEEK_MODEL, DEEPSEEK_ENDPOINT
     global VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON, VERTEX_LLM_MODEL
-    global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW
+    global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW, LLM_TIMEOUT_SECONDS
     global SHOW_AFFILIATE, SHOW_DESCRIPTION, SHOW_KEYWORDS, SHOW_HASHTAGS, SHOW_DISCLAIMER, WEBSITE_URL, CHANNEL_URL, YOUTUBE_API_KEY
     
     settings_path = str(PRIVATE_SETTINGS_FILE)
@@ -99,6 +110,7 @@ def load_settings():
 
                 LLM_FALLBACK_ENABLED = s.get('llm_fallback_enabled', LLM_FALLBACK_ENABLED)
                 LLM_CHAIN_RAW = s.get('llm_chain', LLM_CHAIN_RAW)
+                LLM_TIMEOUT_SECONDS = _positive_int(s.get('llm_timeout_seconds'), LLM_TIMEOUT_SECONDS)
 
                 USE_YEAR = s.get('use_year', USE_YEAR)
                 USE_BEST = s.get('use_best', USE_BEST)
@@ -225,7 +237,7 @@ def _build_llm_chain():
 def call_llm(prompt):
     chain = _build_llm_chain()
     try:
-        text, provider_used = llm_client.call_chain(prompt, chain)
+        text, provider_used = llm_client.call_chain(prompt, chain, timeout=LLM_TIMEOUT_SECONDS)
         if provider_used != LLM_SERVICE:
             print(f"[LLM] Primary provider '{LLM_SERVICE}' failed; succeeded via fallback provider '{provider_used}'.")
         return text

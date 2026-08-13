@@ -45,8 +45,24 @@ def _parse_gemini_style(resp_json):
     return resp_json['candidates'][0]['content']['parts'][0]['text'].strip()
 
 
-def _one_attempt(provider, prompt, api_key, model, endpoint=None, timeout=30):
+# Script generation sends a long prompt and asks for a long answer, and the
+# slower/cheaper providers routinely need well over 30s to produce it -- that
+# flat 30s read timeout was failing Longcat mid-generation on every key and
+# then burning the whole fallback chain for a request that was simply still
+# being written. Connect stays short (a genuinely unreachable host should
+# fail fast); only the read wait is generous.
+DEFAULT_TIMEOUT = 120
+CONNECT_TIMEOUT = 10
+
+
+def _timeout_pair(timeout):
+    total = float(timeout or DEFAULT_TIMEOUT)
+    return (min(CONNECT_TIMEOUT, total), total)
+
+
+def _one_attempt(provider, prompt, api_key, model, endpoint=None, timeout=DEFAULT_TIMEOUT):
     """Single HTTP call. Returns the generated text, or raises LLMCallError."""
+    timeout = _timeout_pair(timeout)
     try:
         if provider == "gemini":
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
@@ -106,7 +122,7 @@ def _one_attempt(provider, prompt, api_key, model, endpoint=None, timeout=30):
     raise LLMCallError(f"HTTP {resp.status_code}: {resp.text[:200]}", retryable=False, status_code=resp.status_code)
 
 
-def call_with_keys(provider, prompt, api_keys, model, endpoint=None, timeout=30, max_attempts_per_key=2):
+def call_with_keys(provider, prompt, api_keys, model, endpoint=None, timeout=DEFAULT_TIMEOUT, max_attempts_per_key=2):
     """Tries each key in `api_keys` in turn. A retryable failure gets one
     short backoff-retry on the SAME key before moving to the next key; a
     fatal failure (bad model, bad auth) moves to the next key immediately.
@@ -182,7 +198,7 @@ def build_chain(primary, provider_config, fallback_enabled=False, chain_raw="", 
     return chain
 
 
-def call_chain(prompt, chain, timeout=30):
+def call_chain(prompt, chain, timeout=DEFAULT_TIMEOUT):
     """chain: ordered list of dicts, each {"provider", "model", "api_keys",
     "endpoint"(optional)}. Tries each entry in order; an entry is exhausted
     only once every one of its keys has failed. Returns (text, provider_used).

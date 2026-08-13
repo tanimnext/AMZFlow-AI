@@ -89,6 +89,11 @@ PROVIDERS = {
     "vertex_gemini": {
         "label": "Google Cloud (Vertex AI)",
         "key_field": "vertex_service_account_private_key",
+        # Vertex authenticates with a whole service-account JSON document,
+        # not an API key -- labelling it "API Keys (one per line)" told
+        # users to paste the wrong thing entirely.
+        "key_label": "Service Account JSON",
+        "key_placeholder": '{ "type": "service_account", "project_id": "...", ... }',
         "model_field": "vertex_llm_model",
         "endpoint_field": None,
         "default_model": "gemini-2.5-flash",
@@ -249,6 +254,8 @@ def public_registry() -> list:
             "endpointField": spec["endpoint_field"],
             "defaultEndpoint": spec.get("default_endpoint", ""),
             "defaultModel": spec["default_model"],
+            "keyLabel": spec.get("key_label", f"{spec['label']} API Keys (one per line)"),
+            "keyPlaceholder": spec.get("key_placeholder", "One key per line"),
             "keysHelp": spec["keys_help"],
             "consoleUrl": spec["console_url"],
             "extraFields": spec.get("extra_fields", []),

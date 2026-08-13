@@ -54,6 +54,7 @@ from voice_config import (
     normalize_gemini_tts_settings,
 )
 from product_core import (
+    SECRET_MARKERS,
     atomic_json,
     format_youtube_text,
     is_safe_https_url,
@@ -807,6 +808,13 @@ def save_settings_route():
     if len(json.dumps(data)) > 200_000:
         return jsonify({"error": "Settings payload is too large"}), 413
     current = get_settings()
+    # Explicit "the user emptied this secret on purpose" list. Without it the
+    # empty-means-keep rule below (which the create page depends on, since it
+    # saves from a redacted settings load) made a stored credential
+    # impossible to remove: blanking the field and saving silently kept it.
+    cleared_secrets = data.pop("__cleared_secrets__", None)
+    if cleared_secrets is not None and not isinstance(cleared_secrets, list):
+        return jsonify({"error": "__cleared_secrets__ must be an array"}), 422
     allowed = set(current) | _template_setting_keys() | {
         "output_root", "product_order", "content_mode", "music_mode",
         "music_track", "enable_intro_clip", "hands_on_notes",
@@ -939,6 +947,14 @@ def save_settings_route():
         ):
             if not isinstance(data[key], str) or not data[key].strip():
                 data.pop(key)
+    # Re-add, as an explicit blank, only the secrets the caller named -- and
+    # only ones that are real settings keys and actually look like secrets,
+    # so this can't be used to blank arbitrary fields.
+    for key in cleared_secrets or []:
+        if not isinstance(key, str) or key not in allowed:
+            continue
+        if any(marker in key.lower() for marker in SECRET_MARKERS):
+            data[key] = ""
     save_settings(data)
     # Update keyword-asin.txt if keywords are provided
     if 'keywords_asin' in data:

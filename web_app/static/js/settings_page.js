@@ -41,15 +41,20 @@
         return SETTINGS;
     }
 
-    async function saveAllSettings() {
-        const button = $("#saveChangesBtn");
-        await withBusy(button, "Saving", async () => {
-            try {
-                await api("/save_settings", { body: collectSettings() });
-                toast("Settings saved", "ok");
-            } catch (err) {
-                toast(`Save failed: ${err.message}`, "error", 6000);
-            }
+    // Secret-looking ids the server treats as "empty means keep the stored
+    // value" (see save_settings_route). That rule exists because the create
+    // page saves from a REDACTED settings load, where blank never meant
+    // "delete". This page loads unredacted values, so a blank field here is
+    // a deliberate deletion -- and without saying so explicitly, a saved
+    // service-account JSON could never be removed at all.
+    const SECRET_ID_MARKERS = ["api_key", "apikey", "access_token", "refresh_token", "client_id", "client_secret", "private_key", "password"];
+
+    function clearedSecretFields() {
+        return Object.keys(SETTINGS).filter((key) => {
+            if (!SECRET_ID_MARKERS.some((marker) => key.toLowerCase().includes(marker))) return false;
+            if (!String(SETTINGS[key] ?? "").trim()) return false;  // nothing stored to clear
+            const el = document.getElementById(key);
+            return !!el && !String(el.value ?? "").trim();
         });
     }
 
@@ -89,8 +94,8 @@
         const extraFields = spec.extraFields || [];
         return `
         <div class="space-y-3">
-            <label class="field"><span class="label">${escapeHtml(spec.label)} API Keys (one per line)</span>
-                <textarea id="${spec.keyField}" rows="3" class="mono" placeholder="One key per line"></textarea></label>
+            <label class="field"><span class="label">${escapeHtml(spec.keyLabel || `${spec.label} API Keys (one per line)`)}</span>
+                <textarea id="${spec.keyField}" rows="3" class="mono" placeholder="${escapeHtml(spec.keyPlaceholder || "One key per line")}"></textarea></label>
             ${extraFields.length ? `<div class="grid grid-cols-${Math.min(extraFields.length, 2)} gap-3">
                 ${extraFields.map((f) => `<label class="field"><span class="label">${escapeHtml(f.label)}</span>
                     <input type="text" id="${f.field}" placeholder="${escapeHtml(f.placeholder || "")}"></label>`).join("")}
@@ -952,15 +957,25 @@
         renderTransitions();
 
         $("#saveChangesBtn")?.addEventListener("click", async () => {
-            const rows = $$(".chain-row").map((row) => ({
-                provider: row.querySelector(".chain-provider").value,
-                model: row.querySelector(".chain-model").value,
-            }));
-            syncChainHidden(rows);
+            // Scoped to the LLM container on purpose. ".chain-row" also
+            // matches the voice fallback rows, which have no ".chain-model"
+            // input -- reading .value off that null threw before the save
+            // ever ran, so Save Changes silently did nothing for anyone with
+            // a voice fallback configured.
+            syncChainHidden($$("#llmChainRows .chain-row").map((row) => ({
+                provider: row.querySelector(".chain-provider")?.value || "",
+                model: row.querySelector(".chain-model")?.value || "",
+            })));
+            syncTtsChainHidden(
+                $$("#ttsChainRows .chain-row")
+                    .map((row) => row.querySelector(".chain-provider")?.value || "")
+                    .filter(Boolean)
+            );
             const activeTransitions = selectedTransitions();
             const customProviders = customTtsSavePayload();
             const partnerTags = partnerTagsSavePayload();
             const modelPresets = llmModelPresetsSavePayload();
+            const cleared = clearedSecretFields();
             try {
                 await api("/save_settings", {
                     body: {
@@ -969,6 +984,7 @@
                         custom_tts_providers: customProviders,
                         partner_tags: partnerTags,
                         llm_model_presets: modelPresets,
+                        ...(cleared.length ? { __cleared_secrets__: cleared } : {}),
                     },
                 });
                 toast("Settings saved", "ok");

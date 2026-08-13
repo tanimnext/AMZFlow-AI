@@ -47,6 +47,9 @@
                         <label class="switch"><input type="checkbox" id="llm_fallback_enabled"><span class="slider"></span></label>
                     </div>
                     <p class="hint mb-2">If the primary provider fails on all of its keys, these are tried in order. Each row reuses that provider's own API key(s) — no extra credentials needed.</p>
+                    <label class="field mb-2"><span class="label">Response timeout (seconds)</span>
+                        <input type="number" id="llm_timeout_seconds" min="10" max="600" step="10" placeholder="120">
+                        <span class="hint">How long to wait for a provider to finish writing. Raise it if you see <span class="mono">timeout: … Read timed out</span> — that means the model was still generating, not that it was down.</span></label>
                     <div id="llmChainRows" class="space-y-2 mb-2"></div>
                     <textarea id="llm_chain" class="hidden" aria-hidden="true"></textarea>
                     <button type="button" id="llmChainAddBtn" class="btn btn-sm w-full">+ Add fallback provider</button>

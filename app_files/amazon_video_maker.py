@@ -99,6 +99,20 @@ VERTEX_LLM_MODEL = "gemini-2.5-flash"
 # key list) are tried in order before giving up entirely.
 LLM_FALLBACK_ENABLED = False
 LLM_CHAIN_RAW = ""
+LLM_TIMEOUT_SECONDS = 120
+# Silence inserted between separately-voiced narration beats, so they land as
+# spoken thoughts with a breath between them rather than one flat run-on.
+BEAT_BREATH_SECONDS = 0.28
+
+
+def _positive_int(value, fallback):
+    """Settings arrive as strings from the form; a blank or junk
+    timeout must not crash the render, it must fall back."""
+    try:
+        parsed = int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
 PARTNER_TAG = "your-tag-20"
 USE_YEAR = True
 USE_BEST = True
@@ -117,6 +131,7 @@ CARTESIA_VOICE_ID = "a0e9987c-56f7-4141-9fa0-81932f79c20b"
 CARTESIA_MODEL_ID = "sonic-english"
 DEEPGRAM_API_KEY = ""
 DEEPGRAM_VOICE_ID = "aura-2-thalia-en"
+DEEPGRAM_MODEL_ID = ""
 GOOGLE_TTS_VOICE_ID = "en-US-Chirp3-HD-Sulafat"
 GOOGLE_TTS_MONTHLY_CHAR_LIMIT = "1000000"
 # AndrewMultilingualNeural sounds noticeably more natural than the plain
@@ -227,9 +242,9 @@ def load_settings_from_external():
     global LLM_SERVICE, LONGCAT_API_KEYS, LONGCAT_ENDPOINT, LONGCAT_MODEL, PARTNER_TAG
     global GEMINI_API_KEYS, GEMINI_MODEL, OPENAI_API_KEYS, OPENAI_MODEL, OPENROUTER_API_KEYS, OPENROUTER_MODEL, DEEPSEEK_API_KEYS, DEEPSEEK_MODEL, DEEPSEEK_ENDPOINT
     global VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON, VERTEX_LLM_MODEL, VERTEX_TTS_MODEL
-    global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW
+    global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW, LLM_TIMEOUT_SECONDS
     global USE_YEAR, USE_BEST, YEAR
-    global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, DEEPGRAM_API_KEY, DEEPGRAM_VOICE_ID, GOOGLE_TTS_VOICE_ID, GOOGLE_TTS_MONTHLY_CHAR_LIMIT, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
+    global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, DEEPGRAM_API_KEY, DEEPGRAM_VOICE_ID, DEEPGRAM_MODEL_ID, GOOGLE_TTS_VOICE_ID, GOOGLE_TTS_MONTHLY_CHAR_LIMIT, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
     global GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, GEMINI_VOICE_STYLE
     global GEMINI_VOICE_PACE, GEMINI_VOICE_ENERGY, GEMINI_VOICE_WARMTH
     global GEMINI_VOICE_ACCENT, GEMINI_VOICE_INSTRUCTION, GEMINI_PRONUNCIATIONS
@@ -291,6 +306,7 @@ def load_settings_from_external():
 
                 LLM_FALLBACK_ENABLED = s.get('llm_fallback_enabled', LLM_FALLBACK_ENABLED)
                 LLM_CHAIN_RAW = s.get('llm_chain', LLM_CHAIN_RAW)
+                LLM_TIMEOUT_SECONDS = _positive_int(s.get('llm_timeout_seconds'), LLM_TIMEOUT_SECONDS)
 
                 PARTNER_TAG = s.get('partner_tag', PARTNER_TAG)
                 USE_YEAR = s.get('use_year', USE_YEAR)
@@ -310,6 +326,7 @@ def load_settings_from_external():
                 CARTESIA_MODEL_ID = s.get('cartesia_model_id', CARTESIA_MODEL_ID)
                 DEEPGRAM_API_KEY = s.get('deepgram_api_key', DEEPGRAM_API_KEY)
                 DEEPGRAM_VOICE_ID = s.get('deepgram_voice_id', DEEPGRAM_VOICE_ID)
+                DEEPGRAM_MODEL_ID = s.get('deepgram_model_id', DEEPGRAM_MODEL_ID)
                 GOOGLE_TTS_VOICE_ID = s.get('google_tts_voice_id', GOOGLE_TTS_VOICE_ID)
                 GOOGLE_TTS_MONTHLY_CHAR_LIMIT = s.get('google_tts_monthly_char_limit', GOOGLE_TTS_MONTHLY_CHAR_LIMIT)
                 EDGE_VOICE = s.get('edge_voice', EDGE_VOICE)
@@ -791,6 +808,30 @@ def fit_and_pad_filter(w=None, h=None):
         w, h = output_resolution()
     return f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1"
 
+def _pick_intro_hook_video(processed):
+    """Footage for the intro's post-thumbnail cut.
+
+    Deliberately skips the FIRST product: the intro is immediately followed
+    by product #1's own segment, so hooking with #1's clip showed the same
+    footage twice in a row. Any later product's video is used instead.
+
+    Product #1 is only used as a last resort -- if it owns the single
+    available clip, reusing it still beats what happened before, which was
+    the intro sitting on one frozen thumbnail for its whole duration.
+    """
+    def usable(entry):
+        path = (entry or {}).get('video')
+        return path and os.path.exists(path)
+
+    for entry in (processed or [])[1:]:
+        if usable(entry):
+            return entry['video']
+    if processed and usable(processed[0]):
+        print("[INTRO] Only the first product has footage; reusing it for the intro hook.")
+        return processed[0]['video']
+    return None
+
+
 def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_intro=False, is_rank=False, branding_filters=None, is_outro_single=False, draw_text=True, hook_video_path=None):
     """Creates a text slide using FFmpeg with image or video background."""
     # Duration formula lives in slide_duration() so the timeline planner and
@@ -844,7 +885,10 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
     if is_intro and hook_video_path and os.path.exists(hook_video_path) and bg_path and os.path.exists(bg_path) and \
             not bg_path.lower().endswith(('.mp4', '.mov', '.avi', '.mkv')):
         try:
-            hook_dur = min(4.0, max(1.0, duration * 0.35))
+            # Thumbnail hook stays short (1-3s) so the real footage gets the
+            # bulk of the intro. At 0.35 of a ~17s intro this used to clamp
+            # to a full 4s of frozen image before anything moved.
+            hook_dur = min(3.0, max(1.0, duration * 0.2))
             video_dur = max(0.5, duration - hook_dur)
             inputs.extend(["-loop", "1", "-t", f"{hook_dur:.3f}", "-i", bg_path])
             inputs.extend(["-stream_loop", "-1", "-i", hook_video_path])
@@ -1074,9 +1118,17 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
             audio_filters = []
             for idx, audio_path in enumerate(valid_audios):
                 audio_inputs.extend(["-i", audio_path])
+                # A short silence after every beat except the last. Butt-joining
+                # separately synthesized beats runs them together with no room
+                # to breathe, which is one of the things that reads as
+                # machine-generated; a real narrator pauses between thoughts.
+                breath = (
+                    f",apad=pad_dur={BEAT_BREATH_SECONDS}"
+                    if idx < len(valid_audios) - 1 else ""
+                )
                 audio_filters.append(
                     f"[{idx}:a]aresample={AUDIO_SAMPLE_RATE}:async=1:first_pts=0,"
-                    f"aformat=sample_fmts=s16:channel_layouts=stereo[a{idx}]"
+                    f"aformat=sample_fmts=s16:channel_layouts=stereo{breath}[a{idx}]"
                 )
             if len(valid_audios) == 1:
                 audio_filters.append("[a0]anull[aout]")
@@ -1870,7 +1922,7 @@ def call_llm_local(prompt):
     provider/key has failed."""
     chain = _build_llm_chain()
     try:
-        text, provider_used = llm_client.call_chain(prompt, chain)
+        text, provider_used = llm_client.call_chain(prompt, chain, timeout=LLM_TIMEOUT_SECONDS)
         if provider_used != LLM_SERVICE:
             print(f"[LLM] Primary provider '{LLM_SERVICE}' failed; succeeded via fallback provider '{provider_used}'.")
         return text
@@ -1913,7 +1965,7 @@ def rewrite_content_with_ai(original_title, features, is_single_asin=False):
     else:
         # Normal YouTube Mode
         if is_truly_single:
-            word_count = "between 280 and 380 words"
+            word_count = "between 220 and 300 words"
             instruction = """Provide a useful, balanced long-form product review.
 CRITICAL STRUCTURE: You MUST start each section with its EXACT header on a new line. 
 REQUIRED HEADERS:
@@ -1931,8 +1983,12 @@ Performance
 
 Do NOT use markdown bolding (like **Key Features**) or leading hashtags (like # Key Features). Just the plain header text."""
         else:
-            word_count = "between 90 and 130 words"
-            instruction = "Explain who it suits, verified strengths, one limitation, and who should skip it."
+            # Tightened from 90-130. At the old length every product in a
+            # 5-product video ran long enough that the whole video dragged;
+            # the shorter budget forces the script to lead with what is
+            # actually different about this product.
+            word_count = "between 60 and 85 words"
+            instruction = "Lead with what makes THIS product stand out, back it with a real strength, name one honest limitation, and land a quick verdict."
             
     desc_prompt_template = f"""TASK: Write a YouTube product review script for voice-over in American English (US).
 PRODUCT: [TITLE]
@@ -1961,10 +2017,28 @@ CRITICAL RULES:
      an expensive model"), and the occasional question to re-engage the
      listener ("So is it worth the price?").
    - Vary sentence openings; don't start every sentence the same way.
-   - Example -- NOT: "Today we are going to discuss the best tire inflators
-     available in 2026." INSTEAD: "Looking for a good tire inflator? Here
-     are some of the best options you can grab in 2026."
-9. Output ONLY the script text in plain US English.
+   - Energy: sound genuinely interested, like recommending something to a
+     friend. Not an announcer, not a manual being read out.
+9. BANNED OPENINGS. Every product in this video is written by you, and they
+   currently all start the same way, which makes the finished video sound
+   like a template. Do NOT begin with any of these, in any wording:
+   - "Looking for ..." / "If you're looking for ..."
+   - "Need ..." / "If you need ..." / "Need a reliable ..."
+   - "Introducing ..." / "Meet the ..." / "Say hello to ..."
+   - "When it comes to ..." / "In today's world ..." / "Are you tired of ..."
+   Open instead on something concrete and specific to THIS product: the
+   number that matters, the thing it does that others don't, the situation
+   it wins in, or a blunt judgment.
+   NOT: "Looking for a reliable tire inflator? This one has 150 PSI."
+   YES: "150 PSI, and it shuts itself off at the pressure you set."
+   YES: "This one earns its price on the cordless motor alone."
+10. PARAGRAPH SHAPE (this controls the voice-over, so it matters):
+   - Write in short paragraphs of 2 to 4 sentences.
+   - Separate every paragraph with ONE blank line.
+   - Each paragraph is voiced as its own audio beat, so make each one a
+     single complete thought that can stand on its own -- do not split a
+     sentence or an idea across a blank line.
+11. Output ONLY the script text in plain US English.
 """
 
     # Parallelize LLM calls for title and description to save time
@@ -2172,6 +2246,50 @@ def _chunk_text_for_tts(text, max_chars=1200):
     return chunks or [text]
 
 
+def _split_script_into_paragraphs(text, max_sentences=4, min_chars=25):
+    """Break a narration script into short 2-4 sentence beats.
+
+    A whole product review used to go to the voice provider as ONE call, so
+    the engine picked a single emotion and pace and held it for the entire
+    stretch -- the flat, obviously-synthetic delivery. Voicing each beat
+    separately lets the provider re-set intonation per beat, and the tiny
+    joins between them read as natural breaths.
+
+    Prefers the blank-line paragraphs the script prompt asks for, and falls
+    back to grouping sentences when the model ignores that.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    paragraphs = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
+    if len(paragraphs) <= 1:
+        paragraphs = [text]
+
+    out = []
+    for para in paragraphs:
+        para = re.sub(r'\s+', ' ', para).strip()
+        sentences = [s for s in re.split(r'(?<=[.!?])\s+', para) if s.strip()]
+        # An authored paragraph is a beat boundary and is never merged into
+        # the one before it -- that blank line is the writer saying "new
+        # thought, re-set the delivery here". Only over-long paragraphs are
+        # subdivided, and only those subdivisions can glue back together.
+        first_of_para = True
+        for i in range(0, len(sentences), max_sentences):
+            beat = " ".join(sentences[i:i + max_sentences]).strip()
+            if not beat:
+                continue
+            # A stray tail fragment from THIS paragraph ("Worth it.") is
+            # glued back on rather than voiced as its own clip, which would
+            # land as an abrupt, disconnected blurt.
+            if out and len(beat) < min_chars and not first_of_para:
+                out[-1] = f"{out[-1]} {beat}".strip()
+            else:
+                out.append(beat)
+            first_of_para = False
+    return out or [text]
+
+
 def _audio_is_sane(path, text):
     """Reject files that pass the old `getsize > 100` check but are actually
     truncated (a mid-stream disconnect leaves a valid-looking short mp3)."""
@@ -2338,6 +2456,7 @@ def _current_tts_config(voice=None):
         "ai33pro_model_id": AI33PRO_MODEL_ID,
         "deepgram_api_key": DEEPGRAM_API_KEY,
         "deepgram_voice_id": DEEPGRAM_VOICE_ID,
+        "deepgram_model_id": DEEPGRAM_MODEL_ID,
         "google_tts_voice_id": GOOGLE_TTS_VOICE_ID,
         "google_tts_monthly_char_limit": GOOGLE_TTS_MONTHLY_CHAR_LIMIT,
         # Gemini TTS rotates through every configured key (matching the LLM
@@ -2744,23 +2863,29 @@ def process_single_asin(asin, keyword, keyword_dir, is_single_asin=False):
         
         else:
             # Default handling for Multi-ASIN or Shorts
-            d_aud = os.path.join(asin_dir, "desc.mp3")
-            
             needs_title_audio = SHORTS_MODE and not is_single_asin
+            # The whole review used to be one TTS call, which locked the
+            # provider into a single emotion and pace for its entire length.
+            # Voicing it as 2-4 sentence beats lets intonation re-set per
+            # beat and puts a natural breath at each join.
+            beats = _split_script_into_paragraphs(desc)
+            voice_override = AI33PRO_VOICE_ID if (TTS_SERVICE == "ai33pro" and AI33PRO_API_KEY) else None
+            beat_paths = [
+                os.path.join(asin_dir, f"desc_beat_{i}.mp3") for i in range(len(beats))
+            ]
+            beat_results = await asyncio.gather(*[
+                generate_tts(beat, path, voice_override)
+                for beat, path in zip(beats, beat_paths)
+            ])
             # Title narration is used only in multi-product Shorts. Avoid an
             # otherwise unused provider call in long-form and single reviews.
-            if TTS_SERVICE == "ai33pro" and AI33PRO_API_KEY:
-                d_res = await generate_tts(desc, d_aud, AI33PRO_VOICE_ID)
-                t_res = (
-                    await generate_tts(new_title, t_aud, AI33PRO_VOICE_ID)
-                    if needs_title_audio else None
-                )
-            else:
-                d_res = await generate_tts(desc, d_aud)
-                t_res = await generate_tts(new_title, t_aud) if needs_title_audio else None
-            
+            t_res = (
+                await generate_tts(new_title, t_aud, voice_override)
+                if needs_title_audio else None
+            )
+
             # Re-encode for volume/codec consistency if they exist
-            for r in [t_res, d_res]:
+            for r in [t_res, *beat_results]:
                 if r and os.path.exists(r):
                     norm_path = r + "_norm.mp3"
                     try:
@@ -2774,12 +2899,23 @@ def process_single_asin(asin, keyword, keyword_dir, is_single_asin=False):
                     except Exception as e:
                         print(f"[AUDIO][WARN] Normalization failed for {os.path.basename(r)}, keeping original: {e}")
 
+            beat_segments = [
+                (path, beat, False)
+                for path, beat in zip(beat_results, beats)
+                if path
+            ]
+            if not beat_segments:
+                # Every beat failed -- report it as one failed segment so the
+                # existing silent-video guard rejects this ASIN rather than
+                # shipping it with no narration.
+                beat_segments = [(None, desc, False)]
+
             # IF SHORTS MODE and MULTI ASIN: Prepend the product title narration
             # The title.mp3 (t_res) is already generated above.
             if SHORTS_MODE and not is_single_asin:
-                return t_res, [(t_res, new_title, False), (d_res, desc, False)]
-            
-            return t_res, [(d_res, desc, False)]
+                return t_res, [(t_res, new_title, False), *beat_segments]
+
+            return t_res, beat_segments
     
     t_res, segment_audio_info = asyncio.run(run_product_tts())
     
@@ -3182,11 +3318,10 @@ async def main_pipeline():
         # 1. Intro -- uses the styled Thumbnail.jpg (generated above) as its
         # background when available, so the intro visually matches the
         # thumbnail instead of a plain product photo/video. After a short
-        # (1-4s) hook on that still image, it cuts to the first product's
-        # real footage for the rest of the intro instead of staying on a
-        # static image the whole time -- see hook_video_path below.
+        # (1-3s) hook on that still image, it cuts to real product footage
+        # for the rest of the intro -- see hook_video_path below.
         intro_bg_asset = intro_thumb_path if intro_thumb_path and os.path.exists(intro_thumb_path) else bg_asset
-        intro_hook_video = processed[0]['video'] if processed and processed[0].get('video') and os.path.exists(processed[0]['video']) else None
+        intro_hook_video = _pick_intro_hook_video(processed)
         i_dur = max(get_audio_duration(intro_aud) + 1.0, 2.2)
         timeline_segments.append({'type': 'intro', 'start': current_time_total, 'dur': i_dur, 'data': (display_title, intro_aud, intro_bg_asset, intro_hook_video), 'caption_text': intro_txt})
         current_time_total += i_dur
@@ -3343,7 +3478,17 @@ async def main_pipeline():
                 if seg['type'] == 'intro':
                     using_thumb_bg = bool(intro_thumb_path) and seg['data'][2] == intro_thumb_path
                     hook_video = seg['data'][3] if len(seg['data']) > 3 else None
-                    return create_text_slide_ffmpeg(seg['data'][0], seg['data'][1], os.path.join(base_dir, "segment_0_intro.mp4"), bg_path=seg['data'][2], is_intro=True, branding_filters=b_filters, draw_text=not using_thumb_bg, hook_video_path=hook_video)
+                    intro_out = os.path.join(base_dir, "segment_0_intro.mp4")
+                    made = create_text_slide_ffmpeg(seg['data'][0], seg['data'][1], intro_out, bg_path=seg['data'][2], is_intro=True, branding_filters=b_filters, draw_text=not using_thumb_bg, hook_video_path=hook_video)
+                    if not made and hook_video:
+                        # The hook concat filtergraph is the only fragile part
+                        # of this slide (odd product footage, weird pixel
+                        # format, unreadable stream). Losing the whole intro
+                        # over it is far worse than losing the motion, so
+                        # rebuild it as the plain thumbnail slide.
+                        print("[INTRO] Hook footage failed to render; falling back to the still thumbnail intro.")
+                        made = create_text_slide_ffmpeg(seg['data'][0], seg['data'][1], intro_out, bg_path=seg['data'][2], is_intro=True, branding_filters=b_filters, draw_text=not using_thumb_bg, hook_video_path=None)
+                    return made
                 elif seg['type'] == 'clip':
                     if b_filters:
                         branded_clip = seg['path'].replace(".mp4", "_branded.mp4")

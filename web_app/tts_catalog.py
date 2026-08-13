@@ -182,13 +182,18 @@ PROVIDERS = {
     },
     "deepgram": {
         "label": "Deepgram Aura-2 (Paid)",
-        "blurb": "Fast, natural-sounding voices; the model id doubles as the voice choice.",
+        "blurb": (
+            "Fast, natural-sounding voices. Deepgram has no separate voice/model split -- "
+            "its `model` parameter IS the voice (aura-2-thalia-en), so the Voice and Model "
+            "lists below are the same live catalogue; setting Model overrides Voice. "
+            "Save a key, then hit refresh to pull the full list from your account."
+        ),
         "needs_key": True,
         "key_field": "deepgram_api_key",
         "voice_field": "deepgram_voice_id",
-        "model_field": None,
-        "voices": "static",
-        "models": None,
+        "model_field": "deepgram_model_id",
+        "voices": "dynamic",
+        "models": "dynamic",
         "supports_rate": False,
         "supports_pitch": False,
         "director": False,
@@ -389,6 +394,8 @@ VOICE_FETCHERS = {
     "edge": lambda _key: _fetch_edge(),
     "elevenlabs": _fetch_elevenlabs,
     "cartesia": _fetch_cartesia,
+    # Deepgram's model id IS its voice id, so one live list serves both.
+    "deepgram": lambda key: _deepgram_tts_models(key),
 }
 
 
@@ -486,7 +493,48 @@ def _fetch_elevenlabs_models(api_key):
     return out
 
 
-MODEL_FETCHERS = {"elevenlabs": _fetch_elevenlabs_models}
+def _deepgram_tts_models(api_key):
+    """Live TTS model list from Deepgram.
+
+    Deepgram has no separate voice/model split the way ElevenLabs does --
+    the `model` request parameter IS the voice (aura-2-thalia-en), so this
+    same list backs both the model and the voice dropdown.
+    """
+    if not api_key:
+        raise ValueError("A Deepgram API key is required to list models")
+    resp = requests.get(
+        "https://api.deepgram.com/v1/models",
+        headers={"Authorization": f"Token {api_key}"},
+        timeout=FETCH_TIMEOUT,
+    )
+    resp.raise_for_status()
+    out = []
+    for item in (resp.json() or {}).get("tts") or []:
+        model_id = item.get("canonical_name") or item.get("name")
+        if not model_id:
+            continue
+        meta = item.get("metadata") or {}
+        traits = ", ".join(str(t) for t in (meta.get("tags") or [])[:3])
+        accent = meta.get("accent") or ""
+        out.append(
+            {
+                "id": model_id,
+                "label": f"{str(item.get('name') or model_id).replace('-', ' ').title()}"
+                         + (f" ({accent})" if accent else ""),
+                # Grouped by architecture so aura-2 and the older aura-1
+                # voices don't read as one undifferentiated list.
+                "group": str(item.get("architecture") or "Deepgram").replace("-", " ").title(),
+                "note": traits,
+            }
+        )
+    out.sort(key=lambda entry: (entry["group"] != "Aura 2", entry["group"], entry["label"].lower()))
+    return out
+
+
+MODEL_FETCHERS = {
+    "elevenlabs": _fetch_elevenlabs_models,
+    "deepgram": _deepgram_tts_models,
+}
 
 
 def list_models(provider: str, api_key: str = "", refresh: bool = False) -> dict:
