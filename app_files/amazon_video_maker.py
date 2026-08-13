@@ -2290,6 +2290,29 @@ def _split_script_into_paragraphs(text, max_sentences=4, min_chars=25):
     return out or [text]
 
 
+def _product_has_audio(p):
+    """False if any REQUIRED narration segment (a normal spoken paragraph,
+    not a silent header marker) is missing or fails the sanity check --
+    including a single failed beat out of an otherwise-successful set, so a
+    review that loses one sentence to a transient TTS failure fails loudly
+    instead of shipping with a chunk of narration quietly missing."""
+    segs = p.get('audio_segments') or []
+    required = [seg for seg in segs if not (len(seg) > 2 and seg[2])]
+    if not required:
+        return False
+    for seg in required:
+        path = seg[0]
+        text = seg[1] if len(seg) > 1 else ""
+        sane, reason = _audio_is_sane(path, text)
+        if not sane:
+            print(
+                f"[AUDIO][FAIL] ASIN {p.get('asin', '?')} required "
+                f"paragraph failed validation: {reason}"
+            )
+            return False
+    return True
+
+
 def _audio_is_sane(path, text):
     """Reject files that pass the old `getsize > 100` check but are actually
     truncated (a mid-stream disconnect leaves a valid-looking short mp3)."""
@@ -2899,16 +2922,18 @@ def process_single_asin(asin, keyword, keyword_dir, is_single_asin=False):
                     except Exception as e:
                         print(f"[AUDIO][WARN] Normalization failed for {os.path.basename(r)}, keeping original: {e}")
 
+            # A failed beat is kept in the list with a None path rather than
+            # dropped. Dropping it would silently ship a video missing
+            # whatever that beat said -- a worse failure than the old
+            # single-call path, which failed the WHOLE description (and
+            # aborted the keyword via _product_has_audio below) the moment
+            # any one chunk came back empty. Keeping the None entry routes a
+            # beat failure through that same existing guard instead of
+            # inventing a quieter, partial-content failure mode.
             beat_segments = [
                 (path, beat, False)
                 for path, beat in zip(beat_results, beats)
-                if path
-            ]
-            if not beat_segments:
-                # Every beat failed -- report it as one failed segment so the
-                # existing silent-video guard rejects this ASIN rather than
-                # shipping it with no narration.
-                beat_segments = [(None, desc, False)]
+            ] or [(None, desc, False)]
 
             # IF SHORTS MODE and MULTI ASIN: Prepend the product title narration
             # The title.mp3 (t_res) is already generated above.
@@ -3111,24 +3136,8 @@ async def main_pipeline():
         # anullsrc silence), shipping a video with a silent chunk instead of
         # failing loudly. Abort the whole keyword instead: no video is better
         # than a broken one, and this is exactly the multi-ASIN failure mode
-        # from the reported bug.
-        def _product_has_audio(p):
-            segs = p.get('audio_segments') or []
-            required = [seg for seg in segs if not (len(seg) > 2 and seg[2])]
-            if not required:
-                return False
-            for seg in required:
-                path = seg[0]
-                text = seg[1] if len(seg) > 1 else ""
-                sane, reason = _audio_is_sane(path, text)
-                if not sane:
-                    print(
-                        f"[AUDIO][FAIL] ASIN {p.get('asin', '?')} required "
-                        f"paragraph failed validation: {reason}"
-                    )
-                    return False
-            return True
-
+        # from the reported bug. Also the guard a single failed narration
+        # beat relies on -- see beat_segments in process_single_asin.
         silent_asins = [p.get('asin', '?') for p in processed if not _product_has_audio(p)]
         if silent_asins:
             print(f"[FATAL] No usable narration audio for ASIN(s) {silent_asins} in '{keyword}' -- skipping this keyword rather than shipping a silent video.")

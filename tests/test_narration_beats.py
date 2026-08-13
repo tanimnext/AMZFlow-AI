@@ -7,6 +7,7 @@ script into 2-4 sentence beats lets intonation re-set per beat, and the
 joins between them become natural breaths.
 """
 import unittest
+import unittest.mock
 
 from app_files import amazon_video_maker as avm
 
@@ -70,6 +71,59 @@ class SplitScriptIntoParagraphsTests(unittest.TestCase):
         rejoined = " ".join(beats).split()
         original = script.split()
         self.assertEqual(rejoined, original)
+
+
+class ProductHasAudioGateTests(unittest.TestCase):
+    """Narration is now voiced as several separate beats instead of one call
+    (see SplitScriptIntoParagraphsTests above). That means many more chances
+    for exactly one beat to fail while the rest succeed -- and a silently
+    dropped beat would ship a video missing whatever that beat said, which is
+    a worse failure than the old single-call path (where one failed chunk
+    failed the whole description). _product_has_audio is the guard that
+    beat_segments in process_single_asin relies on to catch this."""
+
+    def _sane_segment(self, tmp_path, text="Six real words go right here."):
+        with open(tmp_path, "wb") as fh:
+            fh.write(b"\x00" * 5000)  # _audio_is_sane only checks size/duration/path
+        return (tmp_path, text, False)
+
+    def test_a_product_where_every_beat_succeeded_is_fine(self):
+        with unittest.mock.patch.object(avm, "_audio_is_sane", return_value=(True, "ok")):
+            product = {"asin": "A1", "audio_segments": [
+                ("/fake/beat0.mp3", "First beat text here.", False),
+                ("/fake/beat1.mp3", "Second beat text here.", False),
+            ]}
+            self.assertTrue(avm._product_has_audio(product))
+
+    def test_one_failed_beat_among_successful_ones_fails_the_whole_product(self):
+        # This is the exact regression this test guards: beat_segments used
+        # to silently DROP a failed (None-path) beat instead of keeping it,
+        # so a product with 3 good beats and 1 failed one looked "fine" to
+        # this gate and shipped with a missing sentence.
+        with unittest.mock.patch.object(avm, "_audio_is_sane", side_effect=lambda path, text: (
+            (False, "file missing") if path is None else (True, "ok")
+        )):
+            product = {"asin": "A1", "audio_segments": [
+                ("/fake/beat0.mp3", "First beat text here.", False),
+                (None, "Second beat -- this is the one that failed.", False),
+                ("/fake/beat2.mp3", "Third beat text here.", False),
+            ]}
+            self.assertFalse(avm._product_has_audio(product))
+
+    def test_a_product_with_no_narration_segments_at_all_has_no_audio(self):
+        self.assertFalse(avm._product_has_audio({"asin": "A1", "audio_segments": []}))
+        self.assertFalse(avm._product_has_audio({"asin": "A1"}))
+
+    def test_silent_header_markers_are_not_required_to_have_audio(self):
+        # audio_segments entries of the form (label, True, None, header) are
+        # header markers, not spoken narration -- they carry no audio path
+        # and must not count against the product.
+        with unittest.mock.patch.object(avm, "_audio_is_sane", return_value=(True, "ok")):
+            product = {"asin": "A1", "audio_segments": [
+                ("KEY FEATURES", True, None, "KEY FEATURES"),
+                ("/fake/beat0.mp3", "Spoken paragraph text.", False),
+            ]}
+            self.assertTrue(avm._product_has_audio(product))
 
 
 class IntroHookSelectionTests(unittest.TestCase):
