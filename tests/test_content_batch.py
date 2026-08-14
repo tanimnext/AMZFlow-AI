@@ -636,6 +636,61 @@ class ContentBatchManagerTests(unittest.TestCase):
         self.assertIs(first, second)
         self.assertIsNot(first, third)
 
+    def test_deleting_a_job_mid_analysis_does_not_crash_the_worker(self):
+        # The queue's new bulk-delete makes this reachable: a job can now
+        # be removed from the DB while _analyze_job is still running for it
+        # in a background thread. set_status/complete_job both end with
+        # get_job(), which raises KeyError once the row is gone --
+        # _analyze_job must swallow that instead of letting it escape
+        # (concurrent.futures silently drops an exception from a submitted
+        # thread unless the caller inspects the Future, so this used to
+        # fail invisibly rather than loudly).
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = BatchStore(Path(temp_dir) / "jobs.sqlite3")
+            batch = store.create_batch(["https://reviews.example/race-condition"])
+            job_id = batch["jobs"][0]["jobId"]
+
+            def fetcher_that_deletes_the_job(_url):
+                store.delete_job(job_id)
+                return "<html><body>irrelevant</body></html>"
+
+            manager = ContentBatchManager(
+                store, lambda: {}, fetcher=fetcher_that_deletes_the_job
+            )
+            try:
+                manager._analyze_job(job_id)  # must not raise
+            finally:
+                manager.executor.shutdown(wait=True)
+
+            with self.assertRaises(KeyError):
+                store.get_job(job_id)
+
+    def test_deleting_a_job_between_a_late_failure_and_its_status_write_does_not_crash(self):
+        # Covers the narrower window: the job still exists when the
+        # exception is raised, but is deleted before the except-block's own
+        # set_status(..., "FAILED", ...) write lands.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = BatchStore(Path(temp_dir) / "jobs.sqlite3")
+            batch = store.create_batch(["https://reviews.example/race-condition-2"])
+            job_id = batch["jobs"][0]["jobId"]
+
+            real_set_status = store.set_status
+            def set_status_that_deletes_then_raises(jid, status, error=""):
+                if status == "VALIDATING":
+                    raise RuntimeError("simulated failure mid-analysis")
+                if status == "FAILED":
+                    store.delete_job(jid)
+                return real_set_status(jid, status, error)
+
+            manager = ContentBatchManager(
+                store, lambda: {}, fetcher=lambda _url: "<html><body>x</body></html>"
+            )
+            manager.store.set_status = set_status_that_deletes_then_raises
+            try:
+                manager._analyze_job(job_id)  # must not raise
+            finally:
+                manager.executor.shutdown(wait=True)
+
 
 if __name__ == "__main__":
     unittest.main()

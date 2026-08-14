@@ -1160,8 +1160,19 @@ class ContentBatchManager:
                 ]
                 result["confidence"] = min(int(result.get("confidence", 0)), 55)
             self.store.complete_job(job_id, result)
+        except KeyError:
+            # The job's row was deleted (queue bulk-delete now exists) while
+            # this background analysis was still in flight. set_status/
+            # complete_job both end with get_job(), which raises KeyError
+            # once the row is gone -- there is nothing left to update, so
+            # this thread should just stop, not report a failure for a job
+            # that no longer exists.
+            pass
         except Exception as exc:
-            self.store.set_status(job_id, "FAILED", str(exc))
+            try:
+                self.store.set_status(job_id, "FAILED", str(exc))
+            except KeyError:
+                pass  # deleted in the narrow window before this write, too
         finally:
             with self._active_jobs_guard:
                 self._active_jobs.discard(job_id)
