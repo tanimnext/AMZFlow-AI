@@ -73,6 +73,62 @@ class SplitScriptIntoParagraphsTests(unittest.TestCase):
         self.assertEqual(rejoined, original)
 
 
+class StripScriptArtifactsTests(unittest.TestCase):
+    """Finished videos were narrating scaffolding out loud -- section
+    headings, "Number 3", and prompt preamble -- because only single-ASIN
+    mode ever consumed headers and nothing removed them anywhere else."""
+
+    def test_section_headings_are_not_narrated(self):
+        script = "Key Features\n\n150 PSI here.\n\nFinal Verdict\n\nWorth it."
+        out = avm.strip_script_artifacts(script)
+        self.assertNotIn("Key Features", out)
+        self.assertNotIn("Final Verdict", out)
+        self.assertIn("150 PSI here.", out)
+        self.assertIn("Worth it.", out)
+
+    def test_a_real_sentence_starting_with_a_heading_word_survives(self):
+        # "Performance is where it wins." must not be mistaken for the
+        # "Performance" heading -- that would delete real narration.
+        out = avm.strip_script_artifacts("Performance is where this one wins.")
+        self.assertEqual(out, "Performance is where this one wins.")
+
+    def test_rank_labels_are_not_narrated(self):
+        for label in ("Number 3", "Product 2:", "#4", "5.", "Pick 1"):
+            out = avm.strip_script_artifacts(f"{label}\n\nReal narration sentence here.")
+            self.assertEqual(out, "Real narration sentence here.", f"failed for {label!r}")
+
+    def test_model_preamble_is_not_narrated(self):
+        script = "Here's the script:\n\nSure, this is the real narration.\n\nActual content here."
+        out = avm.strip_script_artifacts(script)
+        self.assertNotIn("Here's the script", out)
+        self.assertIn("Actual content here.", out)
+
+    def test_markdown_scaffolding_is_removed_but_text_kept(self):
+        out = avm.strip_script_artifacts("## Overview\n\n**Bold claim** about the product.\n\n- A bullet point.")
+        self.assertNotIn("#", out)
+        self.assertNotIn("**", out)
+        self.assertIn("Bold claim about the product.", out)
+        self.assertIn("A bullet point.", out)
+
+    def test_paragraph_breaks_survive_because_they_drive_voice_beats(self):
+        out = avm.strip_script_artifacts("First beat here.\n\nSecond beat here.")
+        self.assertEqual(out, "First beat here.\n\nSecond beat here.")
+        self.assertEqual(len(avm._split_script_into_paragraphs(out)), 2)
+
+    def test_single_asin_keeps_headers_because_they_drive_section_labels(self):
+        script = "Key Features\n\n150 PSI here.\n\nFinal Verdict\n\nWorth it."
+        out = avm.strip_script_artifacts(script, keep_section_headers=True)
+        self.assertIn("Key Features", out)
+        self.assertIn("Final Verdict", out)
+        # Scaffolding that is never structural is still removed.
+        self.assertNotIn("Number", avm.strip_script_artifacts("Number 3\n\nKey Features\n\nText.", keep_section_headers=True))
+
+    def test_empty_and_scaffolding_only_input(self):
+        self.assertEqual(avm.strip_script_artifacts(""), "")
+        self.assertEqual(avm.strip_script_artifacts(None), "")
+        self.assertEqual(avm.strip_script_artifacts("Key Features\n\nFinal Verdict"), "")
+
+
 class ProductHasAudioGateTests(unittest.TestCase):
     """Narration is now voiced as several separate beats instead of one call
     (see SplitScriptIntoParagraphsTests above). That means many more chances
@@ -124,6 +180,80 @@ class ProductHasAudioGateTests(unittest.TestCase):
                 ("/fake/beat0.mp3", "Spoken paragraph text.", False),
             ]}
             self.assertTrue(avm._product_has_audio(product))
+
+
+class DualVoiceTests(unittest.TestCase):
+    """Gemini TTS was producing an unintended two-person read. One narrator
+    is the default; two hosts is now something the user turns on."""
+
+    def test_single_narrator_by_default(self):
+        with unittest.mock.patch.object(avm, "DUAL_VOICE_ENABLED", False):
+            self.assertEqual([avm._voice_for_beat(i, "primary") for i in range(4)],
+                             ["primary"] * 4)
+
+    def test_enabling_it_alternates_narrators_between_beats(self):
+        with unittest.mock.patch.object(avm, "DUAL_VOICE_ENABLED", True), \
+                unittest.mock.patch.object(avm, "DUAL_VOICE_SECOND", "second-voice"):
+            self.assertEqual(
+                [avm._voice_for_beat(i, "primary") for i in range(4)],
+                ["primary", "second-voice", "primary", "second-voice"],
+            )
+
+    def test_enabled_without_a_second_voice_stays_single(self):
+        # Turning the switch on but leaving the voice field blank must not
+        # silently pass an empty voice id to the provider.
+        with unittest.mock.patch.object(avm, "DUAL_VOICE_ENABLED", True), \
+                unittest.mock.patch.object(avm, "DUAL_VOICE_SECOND", ""):
+            self.assertEqual([avm._voice_for_beat(i, "primary") for i in range(3)],
+                             ["primary"] * 3)
+
+
+class ConclusionTests(unittest.TestCase):
+    """The old outro was a bare "Check the links in description for the best
+    prices" -- no recommendation, and a CTA with no reason to act on it."""
+
+    def test_roundup_names_the_top_pick_and_asks_for_a_price_check(self):
+        out = avm.build_conclusion_text("Tire Inflators", [], False, "Gamma Digital Inflator XL Pro Max Cordless")
+        self.assertIn("Gamma Digital Inflator", out)
+        self.assertIn("price", out.lower())
+        self.assertIn("description", out.lower())
+
+    def test_top_pick_name_is_shortened_so_it_stays_speakable(self):
+        long_title = " ".join(f"Word{i}" for i in range(20))
+        out = avm.build_conclusion_text("Widgets", [], False, long_title)
+        self.assertNotIn("Word9", out)
+
+    def test_single_product_close_uses_singular_link_wording(self):
+        out = avm.build_conclusion_text("Tire Inflator", [], True, None)
+        self.assertIn("link below", out.lower())
+        self.assertNotIn("roundup", out.lower())
+
+    def test_missing_top_pick_still_produces_a_usable_close(self):
+        out = avm.build_conclusion_text("Widgets", [], False, None)
+        self.assertTrue(out.strip().endswith("."))
+        self.assertIn("price", out.lower())
+
+
+class CaptionStyleTests(unittest.TestCase):
+    def test_ass_colour_is_byte_reversed_with_inverted_alpha(self):
+        # ASS stores colour blue-first and treats 00 as fully OPAQUE.
+        self.assertEqual(avm._ass_color("#FF0000"), "&H000000FF")
+        self.assertEqual(avm._ass_color("#0000FF"), "&H00FF0000")
+        self.assertEqual(avm._ass_color("#FFFFFF", 0.0), "&HFFFFFFFF")
+
+    def test_malformed_colour_falls_back_to_white(self):
+        for bad in ("", None, "nonsense", "#12", "#GGGGGG"):
+            self.assertEqual(avm._ass_color(bad), "&H00FFFFFF")
+
+    def test_windows_drive_letter_is_escaped_for_the_filtergraph(self):
+        # An unescaped "C:" makes ffmpeg parse the drive letter as its own
+        # option separator and the subtitles filter fails to load.
+        out = avm._subtitles_filter_path(r"C:\Users\t\captions.srt")
+        self.assertEqual(out, r"C\:/Users/t/captions.srt")
+
+    def test_posix_path_is_left_usable(self):
+        self.assertEqual(avm._subtitles_filter_path("/Users/t/captions.srt"),
+                         "/Users/t/captions.srt")
 
 
 class IntroHookSelectionTests(unittest.TestCase):

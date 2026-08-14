@@ -106,7 +106,20 @@
             <div class="card-pad space-y-4">
                 <label class="field"><span class="label">TTS Provider</span>
                     <select id="tts_service"></select></label>
+                <label class="field"><span class="label">Narration speed</span>
+                    <input type="number" id="narration_speed" min="0.5" max="2" step="0.02" placeholder="1.08">
+                    <span class="hint">Applies to the voice only, not the video. TTS engines read at an even, measured pace that sounds slow next to a real host &mdash; 1.05&ndash;1.15 lands closer to natural. 1.0 turns it off.</span></label>
                 <div id="ttsProviderPanel"></div>
+                <div class="pt-4" style="border-top:1px solid var(--border)">
+                    <div class="flex items-center justify-between mb-2">
+                        <p class="section-label mb-0">Two-Host Mode</p>
+                        <label class="switch"><input type="checkbox" id="dual_voice_enabled"><span class="slider"></span></label>
+                    </div>
+                    <p class="hint mb-2">Alternates two narrators paragraph by paragraph, like a two-host review. Off by default &mdash; a single narrator is the normal shape for a product review. Leave the field blank to keep one voice.</p>
+                    <label class="field"><span class="label">Second narrator voice ID</span>
+                        <input type="text" id="dual_voice_second" class="mono" placeholder="e.g. en-US-AvaMultilingualNeural, or a Gemini voice like Sulafat">
+                        <span class="hint">Must be a voice your <em>current</em> provider accepts &mdash; voice IDs are not shared between providers. Copy one from the Voice list above.</span></label>
+                </div>
             </div>
 
             <div class="card-pad pt-0">
@@ -199,6 +212,33 @@
                         <label class="field"><span class="label">Opacity</span><input type="range" id="outro_overlay_opacity" min="0" max="1" step="0.1"></label>
                     </div>
                     <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Rank Badge</span><input type="color" id="rank_bg_color"></div>
+                    <label class="field"><span class="label">Countdown card duration (seconds)</span>
+                        <input type="number" id="rank_slide_seconds" min="0.5" max="15" step="0.5" placeholder="3">
+                        <span class="hint">How long the "Number 3" card stays on screen.</span></label>
+
+                    <div class="pt-4 space-y-3" style="border-top:1px solid var(--border)">
+                        <div class="flex items-center justify-between">
+                            <p class="section-label mb-0">On-Screen Captions</p>
+                            <label class="switch"><input type="checkbox" id="captions_enabled"><span class="slider"></span></label>
+                        </div>
+                        <p class="hint">Burns the narration into the picture as subtitles. A <span class="mono">captions.srt</span> file is always saved next to the video either way &mdash; turn this on only if you want the text visible in the video itself, since it costs an extra encode pass per render.</p>
+                        <div class="grid grid-cols-2 gap-3">
+                            <label class="field"><span class="label">Font size</span>
+                                <input type="number" id="captions_font_size" min="12" max="120" step="2" placeholder="40"></label>
+                            <label class="field"><span class="label">Position</span>
+                                <select id="captions_position">
+                                    <option value="bottom">Bottom</option>
+                                    <option value="middle">Middle</option>
+                                    <option value="top">Top</option>
+                                </select></label>
+                        </div>
+                        <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Text Color</span><input type="color" id="captions_text_color"></div>
+                        <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Outline Color</span><input type="color" id="captions_outline_color"></div>
+                        <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Background Color</span><input type="color" id="captions_bg_color"></div>
+                        <label class="field"><span class="label">Background opacity</span>
+                            <input type="range" id="captions_bg_opacity" min="0" max="1" step="0.05">
+                            <span class="hint">0 draws an outline instead of a filled box.</span></label>
+                    </div>
 
                     <div class="pt-4" style="border-top:1px solid var(--border)">
                         <p class="section-label">Video Transitions</p>

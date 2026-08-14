@@ -361,7 +361,7 @@ class WebSecurityTests(unittest.TestCase):
         request_body = post.call_args.kwargs["json"]
         prompt = request_body["contents"][0]["parts"][0]["text"]
         self.assertIn("gemini-2.5-pro-preview-tts", request_url)
-        self.assertIn('Pronounce "LiDAR" as "lie-dar"', prompt)
+        self.assertIn('say "LiDAR" as "lie-dar"', prompt)
         self.assertEqual(
             request_body["generationConfig"]["speechConfig"]["voiceConfig"][
                 "prebuiltVoiceConfig"

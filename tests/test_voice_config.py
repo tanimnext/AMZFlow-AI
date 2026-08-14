@@ -54,9 +54,38 @@ class GeminiVoiceConfigTests(unittest.TestCase):
         )
 
         self.assertIn("trusted product-review expert", prompt)
-        self.assertIn('Pronounce "LiDAR" as "lie-dar"', prompt)
-        self.assertIn("Pause briefly before the verdict.", prompt)
+        self.assertIn('say "LiDAR" as "lie-dar"', prompt)
+        self.assertIn("Pause briefly before the verdict", prompt)
         self.assertTrue(prompt.endswith("The LiDAR sensor maps the room."))
+
+    def test_direction_is_one_line_so_tts_cannot_narrate_it_as_prose(self):
+        # Gemini TTS narrated the old multi-line "Director's notes:" block
+        # aloud, so videos opened by speaking the style descriptor. The
+        # direction must stay a single instruction clause ending in a colon.
+        prompt = build_gemini_tts_prompt(
+            "Real narration text goes here.",
+            {"gemini_voice_style": "FRIENDLY_BUYER_GUIDE"},
+        )
+        direction, _, script = prompt.partition(": ")
+        self.assertNotIn("\n", direction, "multi-line direction reads as prose to the model")
+        self.assertNotIn("Director's notes", prompt)
+        self.assertNotIn("Script:", prompt)
+        self.assertEqual(script, "Real narration text goes here.")
+
+    def test_prompt_pins_a_single_narrator(self):
+        # Without an explicit single-narrator instruction the model sometimes
+        # performed one script as a two-person read, alternating male and
+        # female voices partway through.
+        prompt = build_gemini_tts_prompt("Some narration.", {})
+        self.assertIn("one single narrator", prompt)
+
+    def test_a_huge_pronunciation_dictionary_does_not_bloat_the_direction(self):
+        entries = "\n".join(f"Term{i}=tee {i}" for i in range(40))
+        prompt = build_gemini_tts_prompt(
+            "Narration.", {"gemini_pronunciations": entries}
+        )
+        direction = prompt.split(": ")[0]
+        self.assertLessEqual(direction.count('say "'), 6)
 
 
 if __name__ == "__main__":

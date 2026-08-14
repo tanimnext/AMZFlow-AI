@@ -138,25 +138,58 @@ def _level(value: int, low: str, medium: str, high: str) -> str:
     return medium
 
 
+# Each pronunciation is another quoted fragment sitting in the instruction
+# line, and every one of them is something the model might decide to
+# perform. Only the first few ride along.
+_MAX_SPOKEN_PRONUNCIATIONS = 6
+
+
 def build_gemini_tts_prompt(text: str, settings: dict | None) -> str:
+    """Style direction plus the script, shaped so Gemini TTS does not mistake
+    the direction for the performance.
+
+    This used to emit a multi-line "Director's notes:" bullet list followed
+    by a "Script:" heading. Gemini TTS regularly narrated that whole block,
+    so finished videos opened by speaking the style descriptor out loud --
+    "a friendly buyer guide speaking naturally to one listener, with clear
+    advice and no sales hype" -- before any product narration started. A
+    verbose, list-shaped preamble reads as prose, and prose is precisely
+    what a TTS model is built to say.
+
+    Google's documented pattern is one short instruction clause ending in a
+    colon, with the words to speak after it, so that is what this builds
+    now: a single line, one colon, then the script.
+    """
     config = normalize_gemini_tts_settings(settings)
-    notes = [
-        VOICE_STYLES[config["style"]],
-        f"Use a {ACCENTS[config['accent']]} accent.",
-        "Keep the pace "
-        + _level(config["pace"], "deliberate", "natural", "brisk but intelligible")
-        + ".",
-        "Keep the energy "
-        + _level(config["energy"], "calm", "engaged", "high and controlled")
-        + ".",
-        "Make the delivery "
-        + _level(config["warmth"], "neutral", "warm", "very warm and personable")
-        + ".",
-        "Use natural sentence-to-sentence variation and brief pauses at punctuation.",
+
+    style = VOICE_STYLES[config["style"]].rstrip(".")
+    # Phrased as an order ("Narrate as ...") rather than a description, so
+    # the line stays grammatically an instruction the model follows instead
+    # of a sentence it recites.
+    direction = [
+        f"Narrate as {style[0].lower() + style[1:]}",
+        f"in {ACCENTS[config['accent']]}",
+        "at a " + _level(config["pace"], "deliberate", "natural", "brisk but clear") + " pace",
+        "sounding " + _level(config["energy"], "calm", "engaged", "energetic but controlled"),
+        "and " + _level(config["warmth"], "neutral", "warm", "very warm and personable"),
     ]
-    for term, pronunciation in config["pronunciations"].items():
-        notes.append(f'Pronounce "{term}" as "{pronunciation}".')
+
+    extras = [
+        f'say "{term}" as "{pronunciation}"'
+        for term, pronunciation in list(config["pronunciations"].items())[
+            :_MAX_SPOKEN_PRONUNCIATIONS
+        ]
+    ]
     if config["instruction"]:
-        notes.append(config["instruction"])
-    notes.append("Read the script exactly. Do not add, remove, or summarize words.")
-    return "Director's notes:\n- " + "\n- ".join(notes) + "\n\nScript:\n" + str(text)
+        extras.append(config["instruction"].rstrip("."))
+
+    line = ", ".join(direction)
+    if extras:
+        line += "; " + "; ".join(extras)
+    # "one single narrator" is explicit because without it the model
+    # sometimes performed a single-narrator script as a two-person read,
+    # alternating male and female voices partway through a review.
+    return (
+        f"{line}. Speak as one single narrator, reading only the words after "
+        f"this colon and nothing else: {str(text).strip()}"
+    )

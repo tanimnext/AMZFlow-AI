@@ -103,6 +103,39 @@ LLM_TIMEOUT_SECONDS = 120
 # Silence inserted between separately-voiced narration beats, so they land as
 # spoken thoughts with a breath between them rather than one flat run-on.
 BEAT_BREATH_SECONDS = 0.28
+# How long a "Number 3" countdown card stays on screen.
+RANK_SLIDE_SECONDS = 3.0
+# On-screen captions. Off by default: burning them in costs a full extra
+# encode pass, and the .srt sidecar is always written regardless.
+# Two alternating narrators. Off by default: one voice is the normal
+# shape of a product review, and an unintended two-person read was a
+# bug users reported, not a feature they asked for.
+DUAL_VOICE_ENABLED = False
+DUAL_VOICE_SECOND = ""
+CAPTIONS_ENABLED = False
+CAPTIONS_FONT_SIZE = 40
+CAPTIONS_POSITION = "bottom"
+COLOR_CAPTIONS_TEXT = "#FFFFFF"
+COLOR_CAPTIONS_OUTLINE = "#000000"
+COLOR_CAPTIONS_BG = "#000000"
+VAL_CAPTIONS_BG_OPACITY = 0.55
+# Playback rate applied to narration audio only (not the video). TTS engines
+# read at a measured, even pace that sounds sluggish next to how a real
+# review host talks; a small speed-up lands closer to natural without the
+# artifacts a larger stretch introduces. 1.0 disables it.
+NARRATION_SPEED = 1.08
+
+
+def _positive_float(value, fallback, low, high):
+    """Same string-from-a-form coercion as _positive_int, clamped to a
+    sane range so a typo cannot produce a 0.01s slide or 50x audio."""
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    if parsed <= 0:
+        return fallback
+    return max(low, min(high, parsed))
 
 
 def _positive_int(value, fallback):
@@ -165,7 +198,11 @@ TTS_CHAIN_RAW = ""
 # Branding/Visual Defaults (Can be overridden via settings.json)
 LOGO_TEXT = "Top Picks"
 INTRO_TEXT = "Discover the best products for your lifestyle. We've curated the top selections just for you."
-OUTRO_TEXT = "Thanks for watching! Check the links in description to find these products on Amazon."
+# The shipped default. Recognised so build_conclusion_text() can replace it
+# with a real verdict + price-check close, while a user's own custom outro
+# text is always left exactly as they wrote it.
+DEFAULT_OUTRO_TEXT = "Thanks for watching! Check the links in description to find these products on Amazon."
+OUTRO_TEXT = DEFAULT_OUTRO_TEXT
 COLOR_INTRO_TITLE = "#FFFFFF"
 COLOR_INTRO_BG = "#000000"
 VAL_INTRO_BG_OPACITY = 0.5
@@ -243,6 +280,10 @@ def load_settings_from_external():
     global GEMINI_API_KEYS, GEMINI_MODEL, OPENAI_API_KEYS, OPENAI_MODEL, OPENROUTER_API_KEYS, OPENROUTER_MODEL, DEEPSEEK_API_KEYS, DEEPSEEK_MODEL, DEEPSEEK_ENDPOINT
     global VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON, VERTEX_LLM_MODEL, VERTEX_TTS_MODEL
     global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW, LLM_TIMEOUT_SECONDS
+    global RANK_SLIDE_SECONDS, NARRATION_SPEED
+    global DUAL_VOICE_ENABLED, DUAL_VOICE_SECOND
+    global CAPTIONS_ENABLED, CAPTIONS_FONT_SIZE, CAPTIONS_POSITION
+    global COLOR_CAPTIONS_TEXT, COLOR_CAPTIONS_OUTLINE, COLOR_CAPTIONS_BG, VAL_CAPTIONS_BG_OPACITY
     global USE_YEAR, USE_BEST, YEAR
     global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, DEEPGRAM_API_KEY, DEEPGRAM_VOICE_ID, DEEPGRAM_MODEL_ID, GOOGLE_TTS_VOICE_ID, GOOGLE_TTS_MONTHLY_CHAR_LIMIT, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
     global GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, GEMINI_VOICE_STYLE
@@ -307,6 +348,17 @@ def load_settings_from_external():
                 LLM_FALLBACK_ENABLED = s.get('llm_fallback_enabled', LLM_FALLBACK_ENABLED)
                 LLM_CHAIN_RAW = s.get('llm_chain', LLM_CHAIN_RAW)
                 LLM_TIMEOUT_SECONDS = _positive_int(s.get('llm_timeout_seconds'), LLM_TIMEOUT_SECONDS)
+                RANK_SLIDE_SECONDS = _positive_float(s.get('rank_slide_seconds'), RANK_SLIDE_SECONDS, 0.5, 15.0)
+                NARRATION_SPEED = _positive_float(s.get('narration_speed'), NARRATION_SPEED, 0.5, 2.0)
+                DUAL_VOICE_ENABLED = bool(s.get('dual_voice_enabled', DUAL_VOICE_ENABLED))
+                DUAL_VOICE_SECOND = str(s.get('dual_voice_second', DUAL_VOICE_SECOND) or '').strip()
+                CAPTIONS_ENABLED = bool(s.get('captions_enabled', CAPTIONS_ENABLED))
+                CAPTIONS_FONT_SIZE = _positive_float(s.get('captions_font_size'), CAPTIONS_FONT_SIZE, 12, 120)
+                CAPTIONS_POSITION = s.get('captions_position', CAPTIONS_POSITION) or 'bottom'
+                COLOR_CAPTIONS_TEXT = s.get('captions_text_color', COLOR_CAPTIONS_TEXT)
+                COLOR_CAPTIONS_OUTLINE = s.get('captions_outline_color', COLOR_CAPTIONS_OUTLINE)
+                COLOR_CAPTIONS_BG = s.get('captions_bg_color', COLOR_CAPTIONS_BG)
+                VAL_CAPTIONS_BG_OPACITY = _positive_float(s.get('captions_bg_opacity'), VAL_CAPTIONS_BG_OPACITY, 0.0, 1.0) if str(s.get('captions_bg_opacity', '')).strip() not in ('', '0') else 0.0
 
                 PARTNER_TAG = s.get('partner_tag', PARTNER_TAG)
                 USE_YEAR = s.get('use_year', USE_YEAR)
@@ -621,6 +673,126 @@ def apply_video_speed(input_path, duration, base_dir, speed=None):
         try: os.remove(input_path)
         except OSError: pass
     return output_path, new_duration
+
+
+def _ass_color(hex_color, opacity=1.0):
+    """#RRGGBB -> libass &HAABBGGRR.
+
+    ASS stores colour byte-reversed (blue first) and its alpha byte is
+    INVERTED relative to how anyone thinks about opacity: 00 is fully
+    opaque, FF fully transparent.
+    """
+    value = str(hex_color or "#FFFFFF").strip().lstrip("#")
+    if len(value) != 6 or not re.fullmatch(r"[0-9a-fA-F]{6}", value):
+        value = "FFFFFF"
+    r, g, b = value[0:2], value[2:4], value[4:6]
+    alpha = int(round((1.0 - max(0.0, min(1.0, float(opacity)))) * 255))
+    return f"&H{alpha:02X}{b}{g}{r}".upper()
+
+
+def _subtitles_filter_path(path):
+    """Escape a filesystem path for use inside an ffmpeg filtergraph.
+
+    Windows drive letters are the problem case: a bare "C:\\x.srt" makes
+    ffmpeg read ":" as its own option separator.
+    """
+    escaped = str(path).replace("\\", "/")
+    escaped = escaped.replace(":", r"\:").replace("'", r"\'").replace("[", r"\[").replace("]", r"\]")
+    return escaped
+
+
+def burn_captions(input_path, srt_path, base_dir):
+    """Render captions into the picture.
+
+    Opt-in (CAPTIONS_ENABLED) because it costs a full extra encode pass on
+    an already slow render -- users who only want the .srt sidecar for
+    YouTube should not pay for it. Returns the original path untouched on
+    any failure: losing captions is a far smaller loss than losing the
+    finished video.
+    """
+    if not CAPTIONS_ENABLED or not srt_path or not os.path.exists(srt_path):
+        return input_path
+    if os.path.getsize(srt_path) < 10:
+        return input_path
+
+    alignment = {"bottom": 2, "middle": 5, "top": 8}.get(str(CAPTIONS_POSITION).lower(), 2)
+    font_size = round(CAPTIONS_FONT_SIZE * TEXT_SCALE)
+    style_bits = [
+        f"FontSize={font_size}",
+        f"PrimaryColour={_ass_color(COLOR_CAPTIONS_TEXT)}",
+        f"OutlineColour={_ass_color(COLOR_CAPTIONS_OUTLINE)}",
+        f"Alignment={alignment}",
+        f"MarginV={round(70 * TEXT_SCALE)}",
+        "Bold=1",
+    ]
+    if VAL_CAPTIONS_BG_OPACITY > 0.01:
+        # BorderStyle=3 draws a filled box behind the text instead of an
+        # outline, which stays readable over busy product footage.
+        style_bits += [
+            "BorderStyle=3",
+            f"BackColour={_ass_color(COLOR_CAPTIONS_BG, VAL_CAPTIONS_BG_OPACITY)}",
+            "Outline=0",
+            "Shadow=0",
+        ]
+    else:
+        style_bits += ["BorderStyle=1", "Outline=3", "Shadow=1"]
+
+    output_path = os.path.join(base_dir, "video_captioned.mp4")
+    vf = (
+        f"subtitles='{_subtitles_filter_path(srt_path)}'"
+        f":force_style='{','.join(style_bits)}'"
+    )
+    try:
+        run_ffmpeg([
+            "ffmpeg", "-y", "-i", input_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            output_path,
+        ])
+    except Exception as exc:
+        print(f"[CAPTIONS][WARN] Burn-in failed, shipping without on-screen captions: {exc}")
+        if os.path.exists(output_path):
+            try: os.remove(output_path)
+            except OSError: pass
+        return input_path
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
+        return input_path
+    if os.path.exists(input_path):
+        try: os.remove(input_path)
+        except OSError: pass
+    print("[CAPTIONS] Burned on-screen captions into the video.")
+    return output_path
+
+
+def write_captions_srt(base_dir, timeline_segments, speed):
+    """Sidecar .srt for the finished video (also the source for burn-in).
+
+    Timestamps are divided by the video-speed factor for the same reason
+    the description chapter list is: they must describe the video as it
+    actually plays, not the pre-speed timeline.
+    """
+    try:
+        entries = [
+            {
+                "start": seg["start"] / speed,
+                "duration": seg["dur"] / speed,
+                "text": seg.get("caption_text", ""),
+            }
+            for seg in timeline_segments
+        ]
+        srt_text = build_srt(entries)
+        if not srt_text.strip():
+            return None
+        srt_path = os.path.join(base_dir, "captions.srt")
+        with open(srt_path, "w", encoding="utf-8") as handle:
+            handle.write(srt_text)
+        return srt_path
+    except Exception as exc:
+        print(f"[WARN] Caption generation failed: {exc}")
+        return None
 
 
 def build_music_mix_filter(duration):
@@ -1930,7 +2102,7 @@ def call_llm_local(prompt):
         print(f"[LLM][FATAL] All configured providers/keys failed: {e}")
         return ""
 
-def rewrite_content_with_ai(original_title, features, is_single_asin=False):
+def rewrite_content_with_ai(original_title, features, is_single_asin=False, seo_keyword=""):
     print(f"Rewriting content with {LLM_SERVICE.upper()} {'(Single ASIN Mode)' if is_single_asin else ''}...")
     
     evidence = "\n".join(f"- {feature}" for feature in (features or []))
@@ -1990,11 +2162,17 @@ Do NOT use markdown bolding (like **Key Features**) or leading hashtags (like # 
             word_count = "between 60 and 85 words"
             instruction = "Lead with what makes THIS product stand out, back it with a real strength, name one honest limitation, and land a quick verdict."
             
+    keyword_hint = (
+        f"\nSEARCH TERM VIEWERS USED TO FIND THIS VIDEO: {seo_keyword}"
+        if seo_keyword else ""
+    )
     desc_prompt_template = f"""TASK: Write a YouTube product review script for voice-over in American English (US).
 PRODUCT: [TITLE]
 FEATURES: [FEATURES]
 REVIEW TYPE: {review_label}
-CREATOR HANDS-ON NOTES: {HANDS_ON_NOTES if has_hands_on_evidence else "None supplied"}
+CREATOR HANDS-ON NOTES: {HANDS_ON_NOTES if has_hands_on_evidence else "None supplied"}{keyword_hint}
+GOAL: This script has to make a viewer want to look the product up. Be
+concrete and useful -- specifics persuade, adjectives don't.
 
 LENGTH REQUIREMENT: {word_count}
 STYLE: {instruction}
@@ -2038,7 +2216,21 @@ CRITICAL RULES:
    - Each paragraph is voiced as its own audio beat, so make each one a
      single complete thought that can stand on its own -- do not split a
      sentence or an idea across a blank line.
-11. Output ONLY the script text in plain US English.
+11. OPEN WITH THE REASON THIS ONE IS WORTH IT. The very first sentence must
+   state, in plain words, what this product beats the others at -- the
+   single claim a viewer would repeat to a friend. Keep that claim itself
+   between 3 and 10 words, built from a real spec or feature above.
+   Examples of the claim: "the quietest one here", "150 PSI in under a
+   minute", "the only cordless pick on this list".
+12. NATURAL KEYWORD USE. Say the product category in full at least once,
+   the way someone would search for it, and work in the closely related
+   wording a buyer would use (the job it does, the place they'd use it,
+   who it's for). Never list keywords or repeat a phrase mechanically --
+   if a sentence reads like SEO, rewrite it.
+13. NO calls to buy, no links, no prices, and no mention of the
+   description or comments. A separate closing section handles all of
+   that -- adding it here produces the pitch twice in one video.
+14. Output ONLY the script text in plain US English.
 """
 
     # Parallelize LLM calls for title and description to save time
@@ -2071,17 +2263,22 @@ CRITICAL RULES:
             f"all configured provider(s)/key(s) failed (see [LLM][FATAL] above)."
         )
 
-    # NEW FIX: Aggressively remove "Introduction" header if it starts the script
-    # This handles "Introduction:", "Introduction -", "Introduction.", or just "Introduction" followed by newline
-    new_desc = re.sub(r'^(Introduction|Intro|Review|Description|Product Review|Summary)[\s\d\.\-:]*\n?', '', new_desc, flags=re.IGNORECASE).strip()
-    
+    # Strip anything that is scaffolding rather than narration: section
+    # headings, markdown, "Here's the script:", stray "Number 3" labels.
+    # Long-form single-ASIN reviews keep their section headers, which that
+    # mode splits on to drive on-screen labels (and excludes from audio).
+    new_desc = strip_script_artifacts(new_desc, keep_section_headers=is_single_asin)
+    if not new_desc:
+        raise RuntimeError(
+            f"LLM returned only scaffolding (no narratable sentences) for '{original_title}'."
+        )
+
     # Also catch cases where it's a very short first sentence like "Introduction. This is a..."
     first_sentence_match = re.search(r'^Introduction[\s\.\-:]+', new_desc, flags=re.IGNORECASE)
     if first_sentence_match:
         new_desc = new_desc[first_sentence_match.end():].strip()
 
-    new_desc = re.sub(r'^#[^#\n]+\n', '', new_desc).strip() # Remove markdown H1 if present
-    
+
     # SMART TRUNCATION FOR SHORTS MULTI-ASIN
     # If the AI fails to follow the word limit, we trim to the last full sentence within 12 words
     if SHORTS_MODE and not is_single_asin:
@@ -2105,6 +2302,86 @@ CRITICAL RULES:
     return new_title, new_desc
 
 import unicodedata
+
+# Section headings and meta lines an LLM emits around a script. In
+# single-ASIN mode the headers are consumed deliberately (they drive the
+# on-screen section labels), but in multi-product mode nothing stripped them
+# and they were narrated aloud as if they were prose.
+_SCRIPT_HEADER_WORDS = (
+    "key features", "features", "performance", "pros & cons", "pros and cons",
+    "pros", "cons", "final verdict", "the verdict", "verdict", "conclusion",
+    "introduction", "intro", "outro", "summary", "overview", "specs",
+    "specification", "specifications", "key specification", "why this product",
+    "who should buy", "who should skip", "bottom line", "hook",
+)
+
+# Lines that are the model talking about the task instead of performing it.
+_SCRIPT_META_PREFIXES = (
+    "director's note", "directors note", "director note", "script:", "style:",
+    "tone:", "note:", "notes:", "word count", "narrate as", "narration:",
+    "voice-over:", "voiceover:", "output:", "task:", "here is", "here's the",
+    "sure,", "certainly,", "of course,", "as requested", "product:", "title:",
+    "length requirement", "critical rules", "banned opening", "paragraph shape",
+)
+
+
+def strip_script_artifacts(text, keep_section_headers=False):
+    """Remove everything from an LLM script that is not meant to be spoken.
+
+    Reviews were shipping with the narrator reading section headings and
+    prompt scaffolding out loud -- "Key Features", "Number 3", and in the
+    Gemini TTS case the style descriptor itself. Some of that came from the
+    TTS prompt (fixed in voice_config.build_gemini_tts_prompt) and some from
+    the script generator emitting headings that only single-ASIN mode knew
+    how to consume. This is the last line of defence for both: whatever
+    reaches the voice should be sentences a person would actually say.
+
+    `keep_section_headers` is required by single-ASIN long-form reviews,
+    which deliberately split on "Key Features"/"Performance"/... to drive
+    the on-screen section labels -- there the headers are structure, not
+    stray text, and are already excluded from narration by that splitter.
+    """
+    if not text:
+        return ""
+
+    cleaned_lines = []
+    for raw_line in str(text).splitlines():
+        line = raw_line.strip()
+        if not line:
+            cleaned_lines.append("")  # preserve paragraph breaks -- they drive beats
+            continue
+
+        # Markdown scaffolding: **bold**, ## headings, bullets, numbered lists.
+        line = re.sub(r"^\s*#{1,6}\s*", "", line)
+        line = re.sub(r"^\s*[-*•]\s+", "", line)
+        line = line.replace("**", "").replace("__", "")
+        probe = line.strip().strip(":*#-–— ").strip()
+        if not probe:
+            continue
+
+        lowered = probe.lower()
+        if any(lowered.startswith(prefix) for prefix in _SCRIPT_META_PREFIXES):
+            continue
+        # A heading is a SHORT standalone line, not a sentence that happens to
+        # begin with one of these words ("Performance is where it wins." must
+        # survive). Requiring no terminal punctuation and few words keeps
+        # real narration intact.
+        if lowered.rstrip(":") in _SCRIPT_HEADER_WORDS and not probe.endswith((".", "!", "?")):
+            if not keep_section_headers:
+                continue
+            cleaned_lines.append(probe)
+            continue
+        # "Number 3", "Product 3:", "#3", "3." on their own line -- the rank
+        # is already announced by its own slide and narration.
+        if re.fullmatch(r"(?:#\s*)?(?:number|product|pick|rank|no\.?)?\s*\d+\s*[.:)-]?", lowered):
+            continue
+
+        cleaned_lines.append(probe)
+
+    # Collapse runs of blank lines so paragraph splitting stays predictable.
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(cleaned_lines)).strip()
+    return out
+
 
 def sanitize_tts_text(text):
     """Sanitizes text for TTS by converting non-ASCII symbols/accents into clean US English ASCII text to prevent Edge-TTS language switching."""
@@ -2244,6 +2521,96 @@ def _chunk_text_for_tts(text, max_chars=1200):
     if current:
         chunks.append(current)
     return chunks or [text]
+
+
+def build_conclusion_text(human_kw, processed, is_single, top_pick_title=None):
+    """Closing narration: name a winner, then send the viewer to the links.
+
+    The old outro was a bare "Check the links in description for the best
+    prices." -- no recommendation, and the CTA arrived with no reason to act
+    on it. A roundup that never says which one to buy leaves the viewer with
+    nothing to click for, and the whole point of the video is the click.
+
+    Structure: a verdict naming the top pick, then a price-check CTA. Prices
+    move constantly on Amazon, so "check current price" is both the honest
+    phrasing and the stronger reason to click than a price we cannot know.
+    """
+    def _shorten(title, limit=7):
+        words = [w for w in str(title or "").split() if w]
+        return " ".join(words[:limit]) if words else ""
+
+    pick = _shorten(top_pick_title)
+
+    if is_single:
+        lead = f"So that's the {human_kw}."
+        verdict = "If it fits what you need, it's an easy recommendation."
+        cta = "Check the link below for the current price on Amazon."
+        return f"{lead} {verdict} {cta}"
+
+    if pick:
+        verdict = f"If you want one pick, go with the {pick}."
+    else:
+        verdict = f"Any of these is a solid choice for {human_kw}."
+    lead = f"That's our roundup for {human_kw}."
+    cta = "Links are in the description -- tap through to check today's price on Amazon."
+    return f"{lead} {verdict} {cta}"
+
+
+def _voice_for_beat(index, default_voice=None):
+    """Which voice narrates beat `index`.
+
+    Off by default -- one narrator for the whole review, which is what a
+    product review normally sounds like. Gemini TTS was already producing
+    an unintended two-person read on its own (now pinned to a single
+    narrator in build_gemini_tts_prompt); this makes the two-host format an
+    explicit choice instead of a random one.
+
+    Alternating per beat rather than using a provider's multi-speaker API
+    means it works on every provider, and beats are already whole thoughts,
+    so the hand-off lands on a sentence boundary instead of mid-idea.
+    """
+    if not DUAL_VOICE_ENABLED or not DUAL_VOICE_SECOND:
+        return default_voice
+    return DUAL_VOICE_SECOND if index % 2 else default_voice
+
+
+def _apply_narration_speed(path, speed=None):
+    """Nudge narration playback rate in place.
+
+    TTS engines read at an even, measured pace that sounds sluggish next to
+    how a review host actually talks. atempo resamples time without shifting
+    pitch, so a small speed-up reads as "a bit more energetic" rather than
+    chipmunked. Applied to narration only -- VIDEO_SPEED is a separate
+    control that retimes the whole video.
+
+    Best-effort: a failure here leaves the original audio untouched rather
+    than losing a clip that synthesized perfectly well.
+    """
+    speed = float(NARRATION_SPEED if speed is None else speed)
+    if abs(speed - 1.0) < 0.01 or not path or not os.path.exists(path):
+        return path
+    # atempo only accepts 0.5-2.0 per instance; the settings loader already
+    # clamps to that range, so one filter is always enough.
+    speed = max(0.5, min(2.0, speed))
+    temp_path = f"{path}.speed.mp3"
+    try:
+        run_ffmpeg([
+            "ffmpeg", "-y", "-i", path,
+            "-filter:a", f"atempo={speed:.3f}",
+            "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "2", "-ab", "128k",
+            temp_path,
+        ])
+        if os.path.exists(temp_path) and os.path.getsize(temp_path) > 100:
+            os.replace(temp_path, path)
+    except Exception as exc:
+        print(f"[AUDIO][WARN] Narration speed-up skipped for {os.path.basename(path)}: {exc}")
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+    return path
 
 
 def _split_script_into_paragraphs(text, max_sentences=4, min_chars=25):
@@ -2670,7 +3037,13 @@ async def _tts_with_retry(text, output_path, voice, label, attempts=4):
     tts_config = _current_tts_config(voice)
     cache_key = hashlib.sha256(
         json.dumps(
-            {"pipeline_version": TTS_CACHE_VERSION, "key": tts_engine.cache_key(text, tts_config)},
+            {
+                "pipeline_version": TTS_CACHE_VERSION,
+                "key": tts_engine.cache_key(text, tts_config),
+                # Part of the identity: cached audio is stored already
+                # sped-up, so changing the speed has to miss the cache.
+                "narration_speed": round(float(NARRATION_SPEED), 3),
+            },
             sort_keys=True,
         ).encode("utf-8")
     ).hexdigest()
@@ -2695,6 +3068,10 @@ async def _tts_with_retry(text, output_path, voice, label, attempts=4):
         except Exception as e:
             last_reason = f"exception: {e}"
         else:
+            # Speed up before validating and caching, so the sanity check
+            # measures what actually ships and the cache stores the final
+            # audio rather than something that needs re-processing on a hit.
+            _apply_narration_speed(output_path)
             ok, reason = _audio_is_sane(output_path, text)
             if ok:
                 temp_cache = cache_root / f".{cache_key}.{threading.get_ident()}.tmp"
@@ -2794,7 +3171,12 @@ def process_single_asin(asin, keyword, keyword_dir, is_single_asin=False):
         print(f"[SKIP] {asin}: could not fetch product data, skipping this ASIN.")
         return None
 
-    new_title, desc = rewrite_content_with_ai(title, feats, is_single_asin=is_single_asin)
+    # De-hyphenated slug -- the phrase viewers actually searched, so the
+    # script can use that wording naturally instead of inventing its own.
+    seo_keyword = title_case(str(keyword or "").replace("_", " ").replace("-", " "))
+    new_title, desc = rewrite_content_with_ai(
+        title, feats, is_single_asin=is_single_asin, seo_keyword=seo_keyword
+    )
     
     t_aud = os.path.join(asin_dir, "title.mp3")
     
@@ -2897,8 +3279,8 @@ def process_single_asin(asin, keyword, keyword_dir, is_single_asin=False):
                 os.path.join(asin_dir, f"desc_beat_{i}.mp3") for i in range(len(beats))
             ]
             beat_results = await asyncio.gather(*[
-                generate_tts(beat, path, voice_override)
-                for beat, path in zip(beats, beat_paths)
+                generate_tts(beat, path, _voice_for_beat(i, voice_override))
+                for i, (beat, path) in enumerate(zip(beats, beat_paths))
             ])
             # Title narration is used only in multi-product Shorts. Avoid an
             # otherwise unused provider call in long-form and single reviews.
@@ -3210,30 +3592,35 @@ async def main_pipeline():
 
         # Intro / Outro content
         count = len(processed)
+        # Rank 1 is the top pick in BOTH orderings (order_products numbers a
+        # countdown N..1 and a list 1..N), so the conclusion can name a
+        # winner without caring which display order the user chose.
+        top_pick_title = next(
+            (p.get("title") for p in processed if p.get("rank") == 1), None
+        )
         # is_single intentionally NOT recomputed from len(processed) here --
         # see the comment where it's first set, above the ASIN worker pool.
         if SHORTS_MODE:
             # Shorts: Use the full SEO title for intro to include important keywords
             intro_txt = f"{display_title}"
-            # Outro: Explicit CTA to check description
-            if is_single:
-                outro_txt = f"Check the link in description to get {human_kw}!"
-            else:
-                outro_txt = f"Check the links in description for the best prices."
+            outro_txt = build_conclusion_text(human_kw, processed, is_single, top_pick_title)
         else:
             if is_single:
                 # Normal mode Single ASIN: only use the title in the intro voice-over
                 intro_txt = f"{display_title}"
-                # Normal mode Single ASIN: Use settings outro directly with keyword+Review addition
-                base_outro = OUTRO_TEXT.replace("{keyword}", human_kw) if "{keyword}" in OUTRO_TEXT else OUTRO_TEXT
-                outro_txt = base_outro.replace("Thanks for watching!", f"Thanks for watching {human_kw} Review!")
-                if "Thanks for watching" in outro_txt and f"{human_kw} Review" not in outro_txt:
-                    outro_txt = outro_txt.replace("Thanks for watching", f"Thanks for watching {human_kw} Review")
             else:
                 intro_txt = f"{display_title}. {INTRO_TEXT}"
-                outro_txt = OUTRO_TEXT.replace("Thanks for watching!", f"Thanks for watching {human_kw}!")
-                if "{keyword}" in outro_txt:
-                    outro_txt = outro_txt.replace("{keyword}", human_kw)
+            # A verdict + price-check close, rather than the bare "check the
+            # links" line the old outro produced. A custom outro_text in
+            # Settings still wins -- only the shipped default is replaced.
+            if OUTRO_TEXT.strip() and OUTRO_TEXT.strip() != DEFAULT_OUTRO_TEXT.strip():
+                outro_txt = OUTRO_TEXT.replace("{keyword}", human_kw)
+                if "{keyword}" not in OUTRO_TEXT:
+                    outro_txt = outro_txt.replace(
+                        "Thanks for watching!", f"Thanks for watching {human_kw}!"
+                    )
+            else:
+                outro_txt = build_conclusion_text(human_kw, processed, is_single, top_pick_title)
         
         intro_aud = os.path.join(base_dir, "intro.mp3")
         outro_aud = os.path.join(base_dir, "outro.mp3")
@@ -3364,7 +3751,12 @@ async def main_pipeline():
             rank = p["rank"]
             if not is_single:
                 r_aud = os.path.join(base_dir, f"rank_{rank}.mp3")
-                r_dur = max(get_audio_duration(r_aud) + 0.8, 1.8)
+                # Fixed, configurable length. This used to be
+                # audio_duration + 0.8s, so trailing silence in a two-word
+                # "Number 3" clip (which several TTS providers pad
+                # generously) stretched a countdown card that should be a
+                # quick beat into several seconds of dead screen.
+                r_dur = RANK_SLIDE_SECONDS
                 timeline_segments.append({'type': 'rank', 'start': current_time_total, 'dur': r_dur, 'rank': rank, 'audio': r_aud, 'product': p, 'caption_text': f"Number {rank}"})
                 current_time_total += r_dur
             
@@ -3670,6 +4062,14 @@ async def main_pipeline():
             final_output, expected_final_duration, base_dir
         )
 
+        # --- Captions ---
+        # Written here rather than in post-processing because the burn-in
+        # below needs the .srt, and it has to happen before the music mix
+        # (which stream-copies the video track and would otherwise have to
+        # be redone). Timestamps are already post-speed.
+        captions_srt_path = write_captions_srt(base_dir, timeline_segments, VIDEO_SPEED)
+        final_output = burn_captions(final_output, captions_srt_path, base_dir)
+
         # --- Background Music Check ---
         selected_music = None
         music_path = None
@@ -3770,25 +4170,9 @@ async def main_pipeline():
             if not os.path.isfile(os.path.join(base_dir, "Thumbnail.jpg")):
                 raise RuntimeError("Required Thumbnail.jpg was not generated")
 
-            # 2b. Captions -- every timeline segment already carries a
-            # caption_text, but nothing ever called build_srt() on them.
-            # Timestamps are scaled by VIDEO_SPEED for the same reason the
-            # description chapter list is, above.
-            try:
-                caption_entries = [
-                    {
-                        "start": seg["start"] / VIDEO_SPEED,
-                        "duration": seg["dur"] / VIDEO_SPEED,
-                        "text": seg.get("caption_text", ""),
-                    }
-                    for seg in timeline_segments
-                ]
-                srt_text = build_srt(caption_entries)
-                if srt_text.strip():
-                    with open(os.path.join(base_dir, "captions.srt"), "w", encoding="utf-8") as f:
-                        f.write(srt_text)
-            except Exception as caption_error:
-                print(f"[WARN] Caption generation failed: {caption_error}")
+            # 2b. Captions were written (and optionally burned in) back in
+            # the assembly stage -- they have to exist before the music mix,
+            # which stream-copies the video track.
 
             # 3. Apply SEO Metadata to Video
             final_video_path = os.path.join(base_dir, "video.mp4")
