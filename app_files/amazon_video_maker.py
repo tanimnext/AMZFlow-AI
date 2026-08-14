@@ -980,6 +980,31 @@ def fit_and_pad_filter(w=None, h=None):
         w, h = output_resolution()
     return f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1"
 
+def _dedupe_products_by_title(processed, keyword=""):
+    """Drop products whose scraped title exactly matches an earlier one.
+
+    Second dedup layer, by scraped title rather than input ASIN: Amazon
+    often resolves several ASINs (colour/size variants) to the SAME
+    underlying listing, which input-level ASIN dedup cannot catch since the
+    ASINs genuinely differ. Two products that scraped to the literal same
+    title are the same product appearing twice in the finished video.
+    """
+    seen_titles = set()
+    deduped = []
+    for prod in processed:
+        key = re.sub(r"\s+", " ", str(prod.get("title") or "")).strip().lower()
+        if key and key in seen_titles:
+            print(
+                f"[FIX] '{keyword}': dropping ASIN {prod.get('asin', '?')} -- same "
+                f"product as an already-included ASIN (title: {prod.get('title', '')[:60]!r})."
+            )
+            continue
+        if key:
+            seen_titles.add(key)
+        deduped.append(prod)
+    return deduped
+
+
 def _pick_intro_hook_video(processed):
     """Footage for the intro's post-thumbnail cut.
 
@@ -1259,7 +1284,20 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
         print(f"Error creating slide {text}: {e}")
         return None
 
-def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, output_path, branding_filters=None, header_text=None, tail_pad=0.0):
+def _evenly_spaced_indices(total, count=3):
+    """`count` 0-based positions spread across range(total), including both
+    ends when possible. Used to pick which product segments show the CTA
+    overlay -- every single segment showing it read as unnatural spam;
+    2-3 appearances across the whole video is the ask."""
+    if total <= 0 or count <= 0:
+        return set()
+    count = min(count, total)
+    if count == 1:
+        return {total // 2}
+    return {round(i * (total - 1) / (count - 1)) for i in range(count)}
+
+
+def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, output_path, branding_filters=None, header_text=None, tail_pad=0.0, show_cta=True):
     """Creates a product segment (video or slideshow) with audio and title overlay."""
     global COLOR_PRODUCT_TITLE, COLOR_PRODUCT_BG, VAL_PRODUCT_BG_OPACITY, COLOR_BLUEBAR
     global COLOR_LINK_CHECK_TEXT, COLOR_LINK_CHECK_BG
@@ -1529,7 +1567,11 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         audio_idx = 1
 
     # 3. Add Title Overlay (News Style)
-    if clean_title:
+    # Skipped when burned-in captions are on: this ticker (title box + blue
+    # bar + CTA banner + section header) lives in the same bottom band the
+    # caption text uses, and both fighting for that space read worse than
+    # either alone. Captions carry the on-screen text instead.
+    if clean_title and not CAPTIONS_ENABLED:
         # Pixel constants below are tuned for the legacy 720x1280/1280x720
         # canvas; TEXT_SCALE keeps every dimension proportional on the new
         # 1080x1920/1920x1080 output instead of shrinking relative to frame.
@@ -1579,8 +1621,14 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         
         # Call-to-Action (CTA) Settings
         cta_text = "Check the Links in Description for Best Prices"
-        cta_dur = 7.0 
+        cta_dur = 7.0
         cta_in_s = max(duration - cta_dur, txt_in_e + 0.1)
+        # `show_cta=False` keeps every geometry/layout calculation below
+        # unchanged (so the title box and everything anchored to it doesn't
+        # shift) but makes the CTA's enable window impossible to satisfy --
+        # simpler and safer than threading a conditional through the
+        # filtergraph string construction that follows.
+        cta_enable_window = f"between(t,{cta_in_s},{duration})" if show_cta else "0"
         
         # Wrap x_pos and y_pos in logic for Shorts Mode
         slide_speed = round(130 * S)  # px/sec for the reveal animations
@@ -1658,7 +1706,7 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         # Add the CTA (Call to Action) text
         cta_draw = (
             f"[v_title]drawtext=fontfile='{font_path}':text='{cta_text}':fontsize={cta_font_size}:fontcolor={cta_txt_color}:"
-            f"box=1:boxcolor={cta_bg_color}@{VAL_INTRO_OVERLAY_OPACITY}:boxborderw={cta_box_p}:x={cta_x_pos}:y='{cta_final_y}':enable='between(t,{cta_in_s},{duration})'[v_cta]"
+            f"box=1:boxcolor={cta_bg_color}@{VAL_INTRO_OVERLAY_OPACITY}:boxborderw={cta_box_p}:x={cta_x_pos}:y='{cta_final_y}':enable='{cta_enable_window}'[v_cta]"
         )
 
         # 4. Add Section Header (Introduction, Key Features, etc.) above the title box
@@ -1687,22 +1735,36 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
             filter_complex += "; [v_branded]null[v_prebadge]"
 
     else:
-        # If no title, use [bg] as base
+        # If no title, use [bg] as base. filter_base already closes its
+        # chain with the [bg] label (e.g. "[0:v]null[bg]") -- continuing
+        # with a bare "," instead of "; [bg]" tried to hang a second output
+        # label off a filter (null) that only has one, which ffmpeg rejects
+        # outright ("More output link labels specified for filter than it
+        # has outputs"). This was a real, if rare, pre-existing bug: it only
+        # ever fired when a product segment had no title at all. Captions
+        # mode routes every product through this branch (title overlay is
+        # skipped so it can't collide with burned-in captions), which is
+        # what actually surfaced it.
         if branding_filters:
-            filter_complex = f"{filter_base}" + "," + ",".join(branding_filters) + "[v_prebadge]"
+            filter_complex = f"{filter_base}; [bg]" + ",".join(branding_filters) + "[v_prebadge]"
         else:
-            filter_complex = f"{filter_base}[v_prebadge]"
+            filter_complex = f"{filter_base}; [bg]null[v_prebadge]"
 
     # 5. "Check Price" CTA badge, bottom-right corner. Color scheme is picked
     # deterministically per product (from the title text) so back-to-back
-    # products in one video don't all show the identical badge.
+    # products in one video don't all show the identical badge. Gated by
+    # show_cta same as the sliding banner above -- a badge on every single
+    # product segment was the other half of the "CTA every product looks
+    # unnatural" report; both now only appear on the 2-3 segments the
+    # caller picked.
     badge_path = None
-    try:
-        from cta_badge import build_cta_badge
-        badge_out = os.path.abspath(f"{output_path}_ctabadge.png").replace("\\", "/")
-        badge_path = build_cta_badge(setup_font(), badge_out, seed_text=clean_title or output_path)
-    except Exception as e:
-        print(f"CTA badge generation skipped: {e}")
+    if show_cta:
+        try:
+            from cta_badge import build_cta_badge
+            badge_out = os.path.abspath(f"{output_path}_ctabadge.png").replace("\\", "/")
+            badge_path = build_cta_badge(setup_font(), badge_out, seed_text=clean_title or output_path)
+        except Exception as e:
+            print(f"CTA badge generation skipped: {e}")
 
     if badge_path and os.path.exists(badge_path):
         cmd.extend(["-i", badge_path])
@@ -3404,7 +3466,16 @@ async def main_pipeline():
         if not keyword:
             print(f"[FATAL] Invalid or empty keyword in line: {line!r}")
             continue
-        asins = [a.upper() for a in parts[1:] if re.fullmatch(r"[A-Za-z0-9]{10}", a)]
+        raw_asins = [a.upper() for a in parts[1:] if re.fullmatch(r"[A-Za-z0-9]{10}", a)]
+        # A repeated ASIN (typo, duplicate paste, or the same product
+        # appearing twice on an Amazon results page) was never deduplicated
+        # before being handed to the worker pool -- the exact same product
+        # got scraped, scripted, and rendered twice as two separate segments
+        # in one video. dict.fromkeys keeps first-seen order.
+        asins = list(dict.fromkeys(raw_asins))
+        if len(asins) < len(raw_asins):
+            dupes = [a for a in dict.fromkeys(raw_asins) if raw_asins.count(a) > 1]
+            print(f"[FIX] '{keyword}': removed {len(raw_asins) - len(asins)} duplicate ASIN(s): {', '.join(dupes)}")
         if not asins:
             print(f"[FATAL] No valid 10-character ASINs for '{keyword}'.")
             continue
@@ -3505,6 +3576,8 @@ async def main_pipeline():
         if not processed:
             print(f"[FATAL] No products could be processed for '{keyword}' after {keyword_attempts} attempts -- skipping this keyword (no video produced, quota not used).")
             continue
+
+        processed = _dedupe_products_by_title(processed, keyword)
 
         processed = order_products(processed, product_order)
         print(
@@ -3747,7 +3820,13 @@ async def main_pipeline():
                 except: pass
             
         # 3. Products (is_single is the single request-time value set above)
-        for p in processed:
+        # Which product(s) show the on-screen CTA banner/badge -- 2-3 spread
+        # across the video rather than on every product segment, which read
+        # as unnatural repetition. is_single's several product_part
+        # sections belong to ONE product, so they get their own spread
+        # further below instead of one entry each here.
+        cta_product_indices = _evenly_spaced_indices(len(processed), 3) if not is_single else set()
+        for p_index, p in enumerate(processed):
             rank = p["rank"]
             if not is_single:
                 r_aud = os.path.join(base_dir, f"rank_{rank}.mp3")
@@ -3763,30 +3842,42 @@ async def main_pipeline():
             # FOR SINGLE ASIN NOR"INTRODUCTION" # Default for first partMODE (Handling sections on-the-fly)
             if not SHORTS_MODE and is_single:
                 current_header = None
+                # Single-ASIN mode has one product split into several
+                # sections (Key Features, Performance, ...) -- the CTA
+                # spread applies across THOSE sections, not once per
+                # product (there's only one product).
+                valid_parts = [
+                    a for a in p['audio_segments']
+                    if not a[2] and a[0] and os.path.exists(a[0])
+                ]
+                cta_part_indices = _evenly_spaced_indices(len(valid_parts), 3)
+                part_index = 0
                 for a_info in p['audio_segments']:
                     audio_path, text, is_header = a_info[0], a_info[1], a_info[2]
                     forced_label = a_info[3] if len(a_info) > 3 else None
-                    
+
                     if is_header:
                         # Update the current section name (Key Features, etc.)
                         current_header = text
                         continue
-                    
+
                     # Normal product review part
                     if audio_path and os.path.exists(audio_path):
                         label_to_show = forced_label if forced_label else current_header
                         # Add 1s buffer for cinematic transition
                         part_dur = get_audio_duration(audio_path) + 1.0
                         timeline_segments.append({
-                            'type': 'product_part', 
-                            'start': current_time_total, 
-                            'dur': part_dur, 
-                            'rank': rank, 
-                            'product': p, 
+                            'type': 'product_part',
+                            'start': current_time_total,
+                            'dur': part_dur,
+                            'rank': rank,
+                            'product': p,
                             'audio': audio_path,
                             'header': label_to_show, # Pass the section label (forced or current)
                             'caption_text': text,
+                            'show_cta': part_index in cta_part_indices,
                         })
+                        part_index += 1
                         current_time_total += part_dur
             else:
                 # DEFAULT MULTI-ASIN / SHORTS
@@ -3797,7 +3888,7 @@ async def main_pipeline():
                     seg[1] for seg in p['audio_segments']
                     if seg[0] in valid_audios and not (len(seg) > 2 and seg[2])
                 )
-                timeline_segments.append({'type': 'product', 'start': current_time_total, 'dur': p_dur, 'rank': rank, 'product': p, 'audios': valid_audios, 'caption_text': caption_text})
+                timeline_segments.append({'type': 'product', 'start': current_time_total, 'dur': p_dur, 'rank': rank, 'product': p, 'audios': valid_audios, 'caption_text': caption_text, 'show_cta': p_index in cta_product_indices})
                 current_time_total += p_dur
             
         # 4. Outro
@@ -3902,14 +3993,14 @@ async def main_pipeline():
                     return create_text_slide_ffmpeg(str(seg['rank']), seg['audio'], os.path.join(base_dir, f"segment_{seg['rank']}_rank.mp4"), bg_path=r_bg, is_rank=True, branding_filters=b_filters)
                 elif seg['type'] == 'product':
                     p = seg['product']
-                    return create_product_segment_ffmpeg(p['video'], p['images'], seg['audios'], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_product.mp4"), branding_filters=b_filters)
+                    return create_product_segment_ffmpeg(p['video'], p['images'], seg['audios'], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_product.mp4"), branding_filters=b_filters, show_cta=seg.get('show_cta', True))
                 elif seg['type'] == 'product_part':
                     p = seg['product']
                     # Render a specific part of the product review with current section header
                     # Pass the 'header' from the segment data. tail_pad=1.0 matches the
                     # timeline's `part_dur = audio + 1.0` cinematic buffer (see slide_duration
                     # docstring for why this needs to match on both sides).
-                    return create_product_segment_ffmpeg(p['video'], p['images'], [seg['audio']], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_part_{idx}.mp4"), branding_filters=b_filters, header_text=seg.get('header'), tail_pad=1.0)
+                    return create_product_segment_ffmpeg(p['video'], p['images'], [seg['audio']], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_part_{idx}.mp4"), branding_filters=b_filters, header_text=seg.get('header'), tail_pad=1.0, show_cta=seg.get('show_cta', True))
                 elif seg['type'] == 'outro':
                     return create_text_slide_ffmpeg(seg['data'][0], seg['data'][1], os.path.join(base_dir, "segment_final_outro.mp4"), bg_path=seg['data'][2], branding_filters=b_filters, is_outro_single=seg.get('is_outro_single', False))
             except Exception as e:

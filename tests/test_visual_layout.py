@@ -1,9 +1,11 @@
 import unittest
+import unittest.mock
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+from app_files import amazon_video_maker as avm
 from app_files.amazon_video_maker import (
     build_music_mix_filter,
     create_product_segment_ffmpeg,
@@ -123,6 +125,47 @@ class VisualLayoutTests(unittest.TestCase):
             # "Check Price" CTA badge (bottom-right corner) is composited into
             # every segment; its scratch PNG must not survive the render.
             self.assertFalse((temp_path / "segment.mp4_ctabadge.png").exists())
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg required")
+    def test_product_segment_renders_with_the_title_ticker_suppressed(self):
+        # CAPTIONS_ENABLED skips the title/CTA/header ticker so it can't
+        # collide with burned-in captions -- routing every titled product
+        # through the "no title" filtergraph branch, which had a real,
+        # previously-latent bug: it continued straight off filter_base's
+        # closed [bg] label with a bare "," instead of "; [bg]", which
+        # ffmpeg rejects ("More output link labels specified for filter
+        # than it has outputs"). Covers both with and without
+        # branding_filters, since each built the chain differently.
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            audio = temp_path / "voice.mp3"
+            subprocess.run(
+                [
+                    shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=44100",
+                    "-c:a", "libmp3lame", str(audio),
+                ],
+                check=True,
+            )
+
+            patcher = unittest.mock.patch.object(avm, "CAPTIONS_ENABLED", True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+            plain_out = temp_path / "no_branding.mp4"
+            result = create_product_segment_ffmpeg(
+                None, [], [str(audio)], "Test Product Title", str(plain_out),
+            )
+            self.assertEqual(result, str(plain_out))
+            self.assertTrue(probe_media(plain_out, shutil.which("ffprobe"))["hasVideo"])
+
+            branded_out = temp_path / "with_branding.mp4"
+            result = create_product_segment_ffmpeg(
+                None, [], [str(audio)], "Test Product Title", str(branded_out),
+                branding_filters=["drawtext=text='X':fontcolor=white:x=10:y=10"],
+            )
+            self.assertEqual(result, str(branded_out))
+            self.assertTrue(probe_media(branded_out, shutil.which("ffprobe"))["hasVideo"])
 
     def test_different_titles_get_different_badge_color_variants(self):
         # The badge's color scheme is picked deterministically from the

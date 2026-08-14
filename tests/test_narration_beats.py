@@ -256,6 +256,81 @@ class CaptionStyleTests(unittest.TestCase):
                          "/Users/t/captions.srt")
 
 
+class DedupeProductsByTitleTests(unittest.TestCase):
+    """The same product was sometimes appearing twice in one video. Input
+    ASINs can be deduplicated (see the keywords_asin.txt parsing loop this
+    mirrors), but Amazon also resolves several ASINs -- colour/size variants
+    -- to the identical listing, which only shows up AFTER scraping, as a
+    repeated title. This is the second dedup layer that catches that case."""
+
+    def test_an_exact_repeated_title_is_dropped(self):
+        products = [
+            {"asin": "AAAAAAAAAA", "title": "Cordless Tire Inflator 150 PSI"},
+            {"asin": "BBBBBBBBBB", "title": "Cordless Tire Inflator 150 PSI"},
+        ]
+        out = avm._dedupe_products_by_title(products)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["asin"], "AAAAAAAAAA")
+
+    def test_case_and_whitespace_differences_still_count_as_the_same_title(self):
+        products = [
+            {"asin": "AAAAAAAAAA", "title": "Cordless Tire Inflator"},
+            {"asin": "BBBBBBBBBB", "title": "  cordless   tire inflator  "},
+        ]
+        out = avm._dedupe_products_by_title(products)
+        self.assertEqual(len(out), 1)
+
+    def test_genuinely_different_products_all_survive(self):
+        products = [
+            {"asin": "AAAAAAAAAA", "title": "Cordless Tire Inflator"},
+            {"asin": "BBBBBBBBBB", "title": "Digital Tire Pressure Gauge"},
+            {"asin": "CCCCCCCCCC", "title": "Portable Air Compressor"},
+        ]
+        self.assertEqual(len(avm._dedupe_products_by_title(products)), 3)
+
+    def test_products_with_no_title_are_never_dropped_against_each_other(self):
+        # An empty title must not become a shared dedup key that silently
+        # collapses two distinct (if both scrape-failed) products into one.
+        products = [{"asin": "AAAAAAAAAA", "title": ""}, {"asin": "BBBBBBBBBB", "title": ""}]
+        self.assertEqual(len(avm._dedupe_products_by_title(products)), 2)
+
+
+class AsinDedupParsingTests(unittest.TestCase):
+    """Same bug, the other input path: a repeated ASIN in the keyword line
+    itself (typo, duplicate paste) was submitted to the worker pool twice
+    with nothing to stop it, producing two identical segments."""
+
+    def test_duplicate_asins_collapse_to_one_preserving_first_seen_order(self):
+        raw = ["B0FL15BG5Y", "B0GKNH9KHF", "B0FL15BG5Y", "B07MPW62XJ"]
+        deduped = list(dict.fromkeys(raw))
+        self.assertEqual(deduped, ["B0FL15BG5Y", "B0GKNH9KHF", "B07MPW62XJ"])
+
+
+class CtaSpreadTests(unittest.TestCase):
+    """The on-screen 'Check the Links'/'Check Price' overlays were rendered
+    on EVERY product segment -- reported as looking unnatural, repeated so
+    often. _evenly_spaced_indices picks which 2-3 segments (out of the whole
+    video) show it instead."""
+
+    def test_a_short_video_shows_it_on_every_segment_it_has(self):
+        self.assertEqual(avm._evenly_spaced_indices(1, 3), {0})
+        self.assertEqual(avm._evenly_spaced_indices(2, 3), {0, 1})
+
+    def test_a_longer_video_is_capped_at_the_requested_count(self):
+        for total in (3, 5, 8, 10, 20):
+            self.assertLessEqual(len(avm._evenly_spaced_indices(total, 3)), 3)
+
+    def test_spread_includes_both_the_first_and_last_segment(self):
+        for total in (3, 5, 8, 10):
+            indices = avm._evenly_spaced_indices(total, 3)
+            self.assertIn(0, indices)
+            self.assertIn(total - 1, indices)
+
+    def test_zero_or_negative_total_yields_nothing(self):
+        self.assertEqual(avm._evenly_spaced_indices(0, 3), set())
+        self.assertEqual(avm._evenly_spaced_indices(-1, 3), set())
+
+
 class IntroHookSelectionTests(unittest.TestCase):
     """The intro cuts from the thumbnail into real footage. It must not use
     product #1's clip -- product #1's own segment plays immediately after the
