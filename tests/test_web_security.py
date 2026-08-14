@@ -6,6 +6,7 @@ import time
 import base64
 import tempfile
 import unittest
+import uuid
 from unittest.mock import Mock, patch
 
 
@@ -277,6 +278,7 @@ class WebSecurityTests(unittest.TestCase):
             "jobId": "job1", "keyword": "Best Robot Vacuums",
             "sourceUrl": "https://reviews.example/robot-vacuums",
             "generatedAt": "2026-08-12T00:00:00",
+            "renderStatus": "PROCESSING",
         }
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(self.module, "library_root", return_value=tmp):
@@ -288,6 +290,104 @@ class WebSecurityTests(unittest.TestCase):
         self.assertEqual(row["keyword"], "Best Robot Vacuums")
         self.assertFalse(row["hasVideo"])
         self.assertEqual(row["projectId"], "best-robot-vacuums")
+        self.assertEqual(row["jobId"], "job1")
+        self.assertEqual(row["renderStatus"], "PROCESSING")
+
+    def test_content_batches_history_prefers_an_existing_video_file_over_a_failed_status(self):
+        # A slow render that finished successfully AFTER the run was
+        # (incorrectly, or in a since-fixed edge case) recorded as FAILED
+        # must not hide the Watch link -- the file on disk is ground truth.
+        fake_job = {
+            "jobId": "job2", "keyword": "Best Coffee Makers",
+            "sourceUrl": "https://reviews.example/coffee-makers",
+            "generatedAt": "2026-08-12T00:00:00",
+            "renderStatus": "FAILED",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            project_dir = os.path.join(tmp, "best-coffee-makers")
+            os.makedirs(project_dir)
+            with open(os.path.join(project_dir, "best-coffee-makers.mp4"), "wb") as f:
+                f.write(b"fake video bytes")
+            with patch.object(self.module, "library_root", return_value=tmp):
+                store, _ = self.module._content_batch_services()
+                with patch.object(store, "list_generated_jobs", return_value=[fake_job]):
+                    response = self.client.get("/api/content-batches/history")
+        row = response.get_json()["data"][0]
+        self.assertTrue(row["hasVideo"])
+        self.assertEqual(row["renderStatus"], "DONE")
+
+    def _make_content_job(self, keyword="Best Robot Vacuums", url=None):
+        # The content-batch DB is a real, persistent sqlite file (not a
+        # tempdir) shared across test runs, and create_batch rejects a URL
+        # that was already analyzed -- so each call needs its own URL or a
+        # second test run collides with the previous run's leftover rows.
+        url = url or f"https://reviews.example/route-test-{uuid.uuid4().hex}"
+        store, _ = self.module._content_batch_services()
+        batch = store.create_batch([url])
+        job = batch["jobs"][0]
+        store.complete_job(job["jobId"], {
+            "keyword": keyword, "contentType": "ROUNDUP", "confidence": 90,
+            "revenuePotential": "HIGH",
+            "products": [{"asin": "B0RTESTABC", "name": "X", "isIncluded": True}],
+        })
+        return store, job["jobId"]
+
+    def test_delete_content_job_route_removes_it(self):
+        store, job_id = self._make_content_job()
+        response = self.client.delete(
+            f"/api/content-jobs/{job_id}", headers={"X-CSRF-Token": "test-csrf"}
+        )
+        self.assertEqual(response.status_code, 200)
+        with self.assertRaises(KeyError):
+            store.get_job(job_id)
+
+    def test_delete_content_job_route_404s_for_unknown_id(self):
+        response = self.client.delete(
+            f"/api/content-jobs/{'0' * 32}", headers={"X-CSRF-Token": "test-csrf"}
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_bulk_delete_route_removes_the_given_jobs(self):
+        store, job_id_1 = self._make_content_job("Kw One")
+        _, job_id_2 = self._make_content_job("Kw Two")
+        response = self.client.post(
+            "/api/content-jobs/bulk-delete", json={"jobIds": [job_id_1, job_id_2]},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["data"]["deleted"], 2)
+        with self.assertRaises(KeyError):
+            store.get_job(job_id_1)
+
+    def test_bulk_delete_route_rejects_empty_list(self):
+        response = self.client.post(
+            "/api/content-jobs/bulk-delete", json={"jobIds": []},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_regenerate_route_writes_the_keyword_file_and_resets_status(self):
+        store, job_id = self._make_content_job("Best Robot Vacuums")
+        store.update_job(job_id, {"isApproved": True})
+        store.mark_generated(store.get_job(job_id)["batchId"])
+        store.record_generation_results({"best-robot-vacuums"})  # -> FAILED
+        self.assertEqual(store.get_job(job_id)["renderStatus"], "FAILED")
+
+        response = self.client.post(
+            f"/api/content-jobs/{job_id}/regenerate", headers={"X-CSRF-Token": "test-csrf"}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(store.get_job(job_id)["renderStatus"], "PROCESSING")
+        with open(self.module.KEYWORDS_FILE, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("Best Robot Vacuums", content)
+        self.assertIn("B0RTESTABC", content)
+
+    def test_regenerate_route_404s_for_unknown_id(self):
+        response = self.client.post(
+            f"/api/content-jobs/{'0' * 32}/regenerate", headers={"X-CSRF-Token": "test-csrf"}
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_gemini_preview_uses_selected_model_and_director_prompt(self):
         # v7's /preview_tts is async (job id + poll) and cached, and both the

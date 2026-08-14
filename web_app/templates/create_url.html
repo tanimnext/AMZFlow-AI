@@ -34,17 +34,21 @@
     </div>
 
     <div id="contentReviewActions" class="hidden card-pad pt-0 flex flex-wrap items-center justify-between gap-3">
-        <div class="flex flex-wrap gap-2">
+        <div class="flex flex-wrap items-center gap-2">
             <button id="approveAllBtn" type="button" class="btn btn-ok btn-sm">Approve All Ready</button>
             <button id="refreshBatchBtn" type="button" class="btn btn-sm">Refresh</button>
+            <span style="width:1px;height:20px;background:var(--border)" aria-hidden="true"></span>
+            <button id="deleteSelectedJobsBtn" type="button" class="btn btn-sm btn-danger" disabled>Delete Selected</button>
+            <span id="selectedJobsCount" class="text-[12px]" style="color:var(--text-faint)"></span>
         </div>
         <button id="generateApprovedBtn" type="button" class="btn btn-primary btn-sm">Generate Approved</button>
     </div>
 
     <div id="contentReviewTable" class="hidden table-wrap mx-5 mb-5" style="width:calc(100% - 2.5rem)">
-        <table class="data" style="min-width:820px">
+        <table class="data" style="min-width:860px">
             <thead>
                 <tr>
+                    <th class="text-center"><input type="checkbox" id="selectAllJobsCheckbox" data-setting="false" aria-label="Select all rows"></th>
                     <th>Source</th><th>Video Keyword</th><th>Type</th><th class="text-center">Products</th>
                     <th class="text-center">Confidence</th><th>Revenue</th><th>Status</th><th class="text-right">Review</th>
                 </tr>
@@ -54,6 +58,8 @@
     </div>
 </section>
 
+{% include "_render_options.html" %}
+
 <section class="card mb-5" aria-labelledby="content-history-heading">
     <div class="card-head">
         <div>
@@ -61,22 +67,20 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
                 History
             </h2>
-            <p class="card-sub">Videos already generated from this queue. Click Watch to play the finished video.</p>
+            <p class="card-sub">Videos already generated from this queue. Watch appears automatically once a video finishes -- no reload needed.</p>
         </div>
     </div>
     <div id="contentHistoryTable" class="table-wrap mx-5 mb-5" style="width:calc(100% - 2.5rem)">
-        <table class="data" style="min-width:600px">
+        <table class="data" style="min-width:700px">
             <thead>
-                <tr><th>Video Keyword</th><th>Source</th><th>Generated</th><th class="text-right">Video</th></tr>
+                <tr><th>Video Keyword</th><th>Source</th><th>Generated</th><th class="text-center">Status</th><th class="text-right">Video</th></tr>
             </thead>
             <tbody id="contentHistoryBody">
-                <tr><td colspan="4" class="text-center" style="color:var(--text-faint)">No videos generated yet.</td></tr>
+                <tr><td colspan="5" class="text-center" style="color:var(--text-faint)">No videos generated yet.</td></tr>
             </tbody>
         </table>
     </div>
 </section>
-
-{% include "_render_options.html" %}
 {% endblock %}
 
 {% block scripts %}

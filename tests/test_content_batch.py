@@ -502,6 +502,118 @@ class BatchStoreTests(unittest.TestCase):
         )
 
 
+    def _approved_generated_job(self, keyword="Best Robot Vacuums", url="https://reviews.example/robot-vacuums"):
+        batch = self.store.create_batch([url])
+        job = batch["jobs"][0]
+        self.store.complete_job(job["jobId"], {
+            "articleTitle": keyword, "keyword": keyword,
+            "contentType": "ROUNDUP", "confidence": 92, "revenuePotential": "HIGH",
+            "products": [{"asin": "B0ABC12345", "name": "CleanBot X1", "isIncluded": True}],
+        })
+        self.store.update_job(job["jobId"], {"isApproved": True})
+        self.store.mark_generated(batch["batchId"])
+        return job["jobId"]
+
+    def test_delete_job_removes_it(self):
+        batch = self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        job_id = batch["jobs"][0]["jobId"]
+        self.store.delete_job(job_id)
+        with self.assertRaises(KeyError):
+            self.store.get_job(job_id)
+
+    def test_delete_job_on_unknown_id_raises(self):
+        with self.assertRaises(KeyError):
+            self.store.delete_job("0" * 32)
+
+    def test_bulk_delete_removes_only_the_given_jobs(self):
+        batch = self.store.create_batch([
+            "https://reviews.example/a", "https://reviews.example/b", "https://reviews.example/c",
+        ])
+        ids = [j["jobId"] for j in batch["jobs"]]
+        deleted = self.store.delete_jobs(ids[:2])
+        self.assertEqual(deleted, 2)
+        with self.assertRaises(KeyError):
+            self.store.get_job(ids[0])
+        self.store.get_job(ids[2])  # still there, does not raise
+
+    def test_bulk_delete_ignores_unknown_ids_without_failing(self):
+        batch = self.store.create_batch(["https://reviews.example/a"])
+        real_id = batch["jobs"][0]["jobId"]
+        deleted = self.store.delete_jobs([real_id, "0" * 32])
+        self.assertEqual(deleted, 1)
+
+    def test_bulk_delete_of_empty_list_is_a_noop(self):
+        self.assertEqual(self.store.delete_jobs([]), 0)
+
+    def test_a_freshly_generated_job_reports_processing(self):
+        job_id = self._approved_generated_job()
+        self.assertEqual(self.store.get_job(job_id)["renderStatus"], "PROCESSING")
+
+    def test_record_generation_results_marks_success_and_failure_by_slug(self):
+        ok_id = self._approved_generated_job("Best Robot Vacuums", "https://reviews.example/ok")
+        bad_id = self._approved_generated_job("Best Coffee Makers", "https://reviews.example/bad")
+
+        resolved = self.store.record_generation_results({"best-coffee-makers"})
+
+        self.assertEqual(resolved, 2)
+        self.assertEqual(self.store.get_job(ok_id)["renderStatus"], "DONE")
+        self.assertEqual(self.store.get_job(bad_id)["renderStatus"], "FAILED")
+
+    def test_record_generation_results_does_not_touch_jobs_not_sent_to_the_pipeline(self):
+        # Analyzed but never approved/generated -- generated_at is still ''.
+        batch = self.store.create_batch(["https://reviews.example/never-generated"])
+        job_id = batch["jobs"][0]["jobId"]
+        self.store.record_generation_results({"never-generated"})
+        self.assertEqual(self.store.get_job(job_id)["renderStatus"], "")
+
+    def test_record_generation_results_does_not_re_resolve_an_already_resolved_job(self):
+        # Second /run_process run's failure list must not retroactively
+        # flip a job History already reported as DONE.
+        job_id = self._approved_generated_job("Best Robot Vacuums")
+        self.store.record_generation_results(set())
+        self.assertEqual(self.store.get_job(job_id)["renderStatus"], "DONE")
+        self.store.record_generation_results({"best-robot-vacuums"})
+        self.assertEqual(self.store.get_job(job_id)["renderStatus"], "DONE")
+
+    def test_regenerate_stages_the_job_and_resets_render_status(self):
+        job_id = self._approved_generated_job("Best Robot Vacuums")
+        self.store.record_generation_results({"best-robot-vacuums"})  # -> FAILED
+        self.assertEqual(self.store.get_job(job_id)["renderStatus"], "FAILED")
+
+        staged = self.store.regenerate_job(job_id)
+
+        self.assertEqual(staged["keyword"], "Best Robot Vacuums")
+        self.assertEqual(staged["asins"], ["B0ABC12345"])
+        # Back to "in flight" so it doesn't sit there looking permanently
+        # failed while the retry is running.
+        self.assertEqual(self.store.get_job(job_id)["renderStatus"], "PROCESSING")
+
+    def test_regenerate_only_includes_included_products(self):
+        batch = self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        job = batch["jobs"][0]
+        self.store.complete_job(job["jobId"], {
+            "keyword": "Best Robot Vacuums", "contentType": "ROUNDUP",
+            "confidence": 92, "revenuePotential": "HIGH",
+            "products": [
+                {"asin": "B0INCLUDED1", "name": "Kept", "isIncluded": True},
+                {"asin": "B0EXCLUDED1", "name": "Dropped", "isIncluded": False},
+            ],
+        })
+        staged = self.store.regenerate_job(job["jobId"])
+        self.assertEqual(staged["asins"], ["B0INCLUDED1"])
+
+    def test_regenerate_with_no_included_products_raises(self):
+        batch = self.store.create_batch(["https://reviews.example/robot-vacuums"])
+        job = batch["jobs"][0]
+        self.store.complete_job(job["jobId"], {
+            "keyword": "Best Robot Vacuums", "contentType": "ROUNDUP",
+            "confidence": 92, "revenuePotential": "HIGH",
+            "products": [{"asin": "B0EXCLUDED1", "name": "Dropped", "isIncluded": False}],
+        })
+        with self.assertRaises(ValueError):
+            self.store.regenerate_job(job["jobId"])
+
+
 class ContentBatchManagerTests(unittest.TestCase):
     def test_reuses_creators_client_until_credentials_change(self):
         with tempfile.TemporaryDirectory() as temp_dir:

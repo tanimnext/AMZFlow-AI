@@ -18,6 +18,12 @@ from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlun
 
 import requests
 
+try:  # imported as web_app.content_batch (tests) vs flat content_batch (app.py)
+    from . import product_core
+except ImportError:
+    import product_core
+slugify = product_core.slugify
+
 
 MAX_SOURCE_URLS = 20
 MAX_PRODUCTS_PER_JOB = 10
@@ -711,6 +717,17 @@ class BatchStore:
                 db.execute("ALTER TABLE content_jobs ADD COLUMN generated_at TEXT NOT NULL DEFAULT ''")
             except sqlite3.OperationalError:
                 pass  # already has the column
+            # Separate from `status` on purpose: `status` is the analysis-
+            # phase lifecycle (QUEUED/.../READY/FAILED, where FAILED means
+            # "extraction failed" and already drives its own Retry button in
+            # the review table). Reusing it for the render outcome would
+            # make a render failure indistinguishable from an extraction
+            # failure. '' = not generated yet or still rendering, 'DONE' or
+            # 'FAILED' once /run_process reports what actually happened.
+            try:
+                db.execute("ALTER TABLE content_jobs ADD COLUMN render_status TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass  # already has the column
             db.execute(
                 "UPDATE content_jobs SET status = 'QUEUED' "
                 "WHERE status IN ('FETCHING', 'EXTRACTING', 'VALIDATING')"
@@ -733,6 +750,7 @@ class BatchStore:
             "products": json.loads(row["products_json"]),
             "isApproved": bool(row["is_approved"]),
             "generatedAt": row["generated_at"] or None,
+            "renderStatus": row["render_status"] or ("PROCESSING" if row["generated_at"] else ""),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -852,6 +870,71 @@ class BatchStore:
                 "WHERE batch_id = ? AND is_approved = 1",
                 (_now(), _now(), batch_id),
             )
+
+    def delete_job(self, job_id: str) -> None:
+        """Removes a job's DB row -- from the review queue or from History,
+        whichever it currently is (both are the same table). Does NOT touch
+        any already-rendered video file on disk; that stays a separate,
+        deliberate action."""
+        with self._connect() as db:
+            cursor = db.execute("DELETE FROM content_jobs WHERE job_id = ?", (job_id,))
+        if cursor.rowcount == 0:
+            raise KeyError("Content job was not found")
+
+    def delete_jobs(self, job_ids: list[str]) -> int:
+        """Bulk delete for the queue table's multi-select. Silently skips
+        ids that don't exist -- a stale selection (e.g. someone else, or a
+        prior click, already removed one) shouldn't fail the whole batch."""
+        if not job_ids:
+            return 0
+        with self._connect() as db:
+            placeholders = ",".join("?" for _ in job_ids)
+            cursor = db.execute(
+                f"DELETE FROM content_jobs WHERE job_id IN ({placeholders})", job_ids
+            )
+        return cursor.rowcount
+
+    def regenerate_job(self, job_id: str) -> dict:
+        """Re-stages a single job for another render pass. The render
+        pipeline itself already resumes an interrupted keyword instead of
+        starting over -- it reuses the existing project folder unless a
+        finished video.mp4 is already sitting in it (see
+        amazon_video_maker.py's `resuming` check) -- so simply re-queuing
+        the SAME keyword is what "retry from where it stopped" needs; there
+        is no separate partial-progress state to restore here."""
+        job = self.get_job(job_id)
+        asins = [p["asin"] for p in job["products"] if p.get("isIncluded", True) and p.get("asin")]
+        if not asins:
+            raise ValueError("This job has no included products to render")
+        with self._connect() as db:
+            db.execute(
+                "UPDATE content_jobs SET render_status = '', updated_at = ? WHERE job_id = ?",
+                (_now(), job_id),
+            )
+        return {"keyword": job["keyword"], "asins": asins}
+
+    def record_generation_results(self, failed_keyword_slugs: set[str]) -> int:
+        """Called once a /run_process run finishes, resolving every job that
+        was queued for this run (render_status == '' but generated_at is
+        set -- i.e. sent to the pipeline, outcome not yet known) to DONE or
+        FAILED by matching the same slugify() the render pipeline itself
+        uses to turn a keyword into both a folder name and the
+        "--- Keyword: X ---" log line _track_keyword_failure reads.
+        Returns how many jobs were resolved."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT job_id, keyword FROM content_jobs "
+                "WHERE generated_at != '' AND render_status = ''"
+            ).fetchall()
+            resolved = 0
+            for row in rows:
+                outcome = "FAILED" if slugify(row["keyword"]) in failed_keyword_slugs else "DONE"
+                db.execute(
+                    "UPDATE content_jobs SET render_status = ?, updated_at = ? WHERE job_id = ?",
+                    (outcome, _now(), row["job_id"]),
+                )
+                resolved += 1
+        return resolved
 
     def list_generated_jobs(self, limit: int = 30) -> list[dict]:
         """Flattened, newest-first list of jobs that have actually been sent

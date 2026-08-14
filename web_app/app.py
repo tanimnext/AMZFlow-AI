@@ -1028,6 +1028,56 @@ def update_content_job(job_id):
         return _api_error("VALIDATION_ERROR", str(exc), 422)
 
 
+@app.route("/api/content-jobs/<job_id>", methods=["DELETE"])
+def delete_content_job(job_id):
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+        return _api_error("NOT_FOUND", "Content job was not found", 404)
+    try:
+        store, _ = _content_batch_services()
+        store.delete_job(job_id)
+        return jsonify({"data": {"deleted": 1}})
+    except KeyError:
+        return _api_error("NOT_FOUND", "Content job was not found", 404)
+
+
+@app.route("/api/content-jobs/bulk-delete", methods=["POST"])
+def bulk_delete_content_jobs():
+    try:
+        data = require_json_object()
+    except ValueError as exc:
+        return _api_error("VALIDATION_ERROR", str(exc), 400)
+    job_ids = data.get("jobIds")
+    if not isinstance(job_ids, list) or not job_ids:
+        return _api_error("VALIDATION_ERROR", "jobIds must be a non-empty array", 422)
+    if len(job_ids) > 100:
+        return _api_error("VALIDATION_ERROR", "A maximum of 100 jobs can be deleted at once", 422)
+    clean_ids = [j for j in job_ids if isinstance(j, str) and re.fullmatch(r"[a-f0-9]{32}", j)]
+    if not clean_ids:
+        return _api_error("VALIDATION_ERROR", "No valid job ids supplied", 422)
+    store, _ = _content_batch_services()
+    deleted = store.delete_jobs(clean_ids)
+    return jsonify({"data": {"deleted": deleted}})
+
+
+@app.route("/api/content-jobs/<job_id>/regenerate", methods=["POST"])
+def regenerate_content_job(job_id):
+    """Re-stages one History job (typically a FAILED one) as the sole entry
+    in keywords_asin.txt for the next /run_process call. Same one-shot
+    overwrite contract prepare_content_batch already uses for that file --
+    the caller is expected to start generation immediately after."""
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+        return _api_error("NOT_FOUND", "Content job was not found", 404)
+    try:
+        store, _ = _content_batch_services()
+        staged = store.regenerate_job(job_id)
+    except KeyError:
+        return _api_error("NOT_FOUND", "Content job was not found", 404)
+    except ValueError as exc:
+        return _api_error("VALIDATION_ERROR", str(exc), 422)
+    _write_keywords_file([", ".join([staged["keyword"], *staged["asins"]])])
+    return jsonify({"data": {"jobId": job_id, "videoCount": 1}})
+
+
 @app.route("/api/content-jobs/<job_id>/retry", methods=["POST"])
 def retry_content_job(job_id):
     if not re.fullmatch(r"[a-f0-9]{32}", job_id):
@@ -1085,6 +1135,10 @@ def content_batches_history():
             "generatedAt": job["generatedAt"],
             "projectId": project_id,
             "hasVideo": has_video,
+            # A video FILE existing is the strongest signal (a completed
+            # render, even if record_generation_results' log-line matching
+            # somehow missed it) and wins over the DB-tracked status.
+            "renderStatus": "DONE" if has_video else job["renderStatus"],
         })
     return jsonify({"data": data})
 
@@ -1290,6 +1344,16 @@ def run_process():
             process.wait()
             if failed_keywords:
                 yield f"data: __FAILED_KEYWORDS__:{','.join(failed_keywords)}\n\n"
+            try:
+                # Resolves every content_batches job this run touched
+                # (queued via URL-to-Video, generated_at set, outcome not
+                # yet known) to DONE or FAILED, so the History table's
+                # Status column reflects reality instead of just "does a
+                # video file happen to exist on disk right now".
+                store, _ = _content_batch_services()
+                store.record_generation_results(set(failed_keywords))
+            except Exception as e:
+                print(f"[WARN] Could not record content-batch render results: {e}")
 
         finally:
             if lock_acquired:

@@ -332,6 +332,7 @@
 
     let currentContentBatch = null;
     let contentBatchPollTimer = null;
+    const selectedJobIds = new Set();
 
     function updateContentUrlCount() {
         const textarea = $("#content_urls");
@@ -423,6 +424,12 @@
         const processing = jobs.filter((j) => ["QUEUED", "FETCHING", "EXTRACTING", "VALIDATING"].includes(j.status)).length;
         summary.textContent = `${jobs.length} URLs · ${processing} processing · ${ready} ready · ${approved} approved`;
 
+        // A row that no longer exists in this render can't stay "selected".
+        const liveIds = new Set(jobs.map((j) => j.jobId));
+        for (const id of [...selectedJobIds]) {
+            if (!liveIds.has(id)) selectedJobIds.delete(id);
+        }
+
         jobs.forEach((job) => {
             let host = job.sourceUrl;
             try { host = new URL(job.sourceUrl).hostname; } catch (_) {}
@@ -438,6 +445,7 @@
                    <div class="text-[11px] mt-1" style="color:var(--danger-600);max-width:220px">${escapeHtml(job.error)}</div>`
                 : `<span class="badge ${badgeClass}">${escapeHtml(statusLabel)}</span>`;
             row.innerHTML = `
+                <td class="text-center"><input type="checkbox" class="job-select-checkbox" data-job-id="${job.jobId}" ${selectedJobIds.has(job.jobId) ? "checked" : ""} aria-label="Select this row"></td>
                 <td class="truncate max-w-[170px]" title="${escapeHtml(host)}">${escapeHtml(host)}</td>
                 <td class="font-medium" style="color:var(--text)">${escapeHtml(job.keyword || job.articleTitle || "Analyzing…")}</td>
                 <td>${escapeHtml(job.contentType || "")}</td>
@@ -446,6 +454,11 @@
                 <td>${escapeHtml(job.revenuePotential || "")}</td>
                 <td>${statusCell}</td>
                 <td class="text-right"></td>`;
+            row.querySelector(".job-select-checkbox").addEventListener("change", (e) => {
+                if (e.target.checked) selectedJobIds.add(job.jobId);
+                else selectedJobIds.delete(job.jobId);
+                updateSelectedJobsUI();
+            });
             const actionCell = row.lastElementChild;
             const reviewBtn = document.createElement("button");
             reviewBtn.type = "button";
@@ -463,12 +476,48 @@
             detailRow.className = "hidden";
             detailRow.style.background = "var(--surface-2)";
             const detailCell = document.createElement("td");
-            detailCell.colSpan = 8;
+            detailCell.colSpan = 9;
             detailCell.className = "p-4";
             detailCell.appendChild(buildContentReviewEditor(job));
             detailRow.appendChild(detailCell);
             body.appendChild(detailRow);
         });
+
+        updateSelectedJobsUI();
+        const selectAll = $("#selectAllJobsCheckbox");
+        if (selectAll) {
+            selectAll.checked = jobs.length > 0 && selectedJobIds.size === jobs.length;
+            selectAll.indeterminate = selectedJobIds.size > 0 && selectedJobIds.size < jobs.length;
+        }
+    }
+
+    function updateSelectedJobsUI() {
+        const btn = $("#deleteSelectedJobsBtn");
+        const count = $("#selectedJobsCount");
+        if (btn) btn.disabled = selectedJobIds.size === 0;
+        if (count) count.textContent = selectedJobIds.size ? `${selectedJobIds.size} selected` : "";
+    }
+
+    async function deleteSelectedJobs() {
+        if (!selectedJobIds.size) return;
+        const ids = [...selectedJobIds];
+        const confirmed = await modal({
+            title: "Delete selected rows?",
+            message: `This removes ${ids.length} row(s) from the queue. Rows already generated into a video are not affected -- only the queue entry is deleted.`,
+            kind: "warn",
+            confirmText: "Delete",
+            cancelText: "Cancel",
+            danger: true,
+        });
+        if (!confirmed) return;
+        try {
+            await api("/api/content-jobs/bulk-delete", { body: { jobIds: ids } });
+            selectedJobIds.clear();
+            await refreshContentBatch();
+            toast(`Deleted ${ids.length} row(s)`, "ok", 3000);
+        } catch (err) {
+            showContentBatchError(err.message);
+        }
     }
 
     function buildContentReviewEditor(job) {
@@ -587,6 +636,9 @@
         }
     }
 
+    const HISTORY_STATUS_BADGE = { PROCESSING: "badge-brand", DONE: "badge-ok", FAILED: "badge-error" };
+    const HISTORY_STATUS_LABEL = { PROCESSING: "PROCESSING", DONE: "DONE", FAILED: "FAILED", "": "PENDING" };
+
     async function loadContentHistory() {
         const body = $("#contentHistoryBody");
         if (!body) return;
@@ -594,25 +646,71 @@
             const result = await api("/api/content-batches/history?limit=30");
             const rows = result.data || [];
             if (!rows.length) {
-                body.innerHTML = `<tr><td colspan="4" class="text-center" style="color:var(--text-faint)">No videos generated yet.</td></tr>`;
+                body.innerHTML = `<tr><td colspan="5" class="text-center" style="color:var(--text-faint)">No videos generated yet.</td></tr>`;
                 return;
             }
             body.innerHTML = rows.map((row) => {
                 let host = row.sourceUrl;
                 try { host = new URL(row.sourceUrl).hostname; } catch (_) {}
                 const when = row.generatedAt ? new Date(row.generatedAt).toLocaleString() : "";
+                // A finished video FILE is the strongest signal there is --
+                // if it exists, Watch shows regardless of what the status
+                // badge says (a render that succeeded after a slow finish
+                // must never be hidden behind a stale "PROCESSING" badge).
                 const watchCell = row.hasVideo
                     ? `<a class="btn btn-sm" href="/video/${encodeURIComponent(row.projectId)}" target="_blank" rel="noopener">▶ Watch</a>`
-                    : `<span class="hint">Not found</span>`;
-                return `<tr>
+                    : row.renderStatus === "FAILED"
+                        ? `<button type="button" class="btn btn-sm" data-history-action="retry" data-job-id="${row.jobId}">↻ Retry</button>`
+                        : `<span class="hint">${row.renderStatus === "PROCESSING" ? "Rendering…" : "Not found"}</span>`;
+                const statusBadge = HISTORY_STATUS_BADGE[row.renderStatus] || "badge-neutral";
+                const statusLabel = HISTORY_STATUS_LABEL[row.renderStatus] ?? row.renderStatus;
+                return `<tr data-job-id="${row.jobId}">
                     <td class="font-medium" style="color:var(--text)">${escapeHtml(row.keyword)}</td>
                     <td class="truncate max-w-[170px]" title="${escapeHtml(host)}">${escapeHtml(host)}</td>
                     <td>${escapeHtml(when)}</td>
-                    <td class="text-right">${watchCell}</td>
+                    <td class="text-center"><span class="badge ${statusBadge}">${escapeHtml(statusLabel)}</span></td>
+                    <td class="text-right">
+                        <div class="flex justify-end gap-2">
+                            ${watchCell}
+                            <button type="button" class="btn btn-icon btn-ghost" data-history-action="delete" data-job-id="${row.jobId}" title="Delete this row" aria-label="Delete this row">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-7 0v12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V7"/></svg>
+                            </button>
+                        </div>
+                    </td>
                 </tr>`;
             }).join("");
         } catch (err) {
-            body.innerHTML = `<tr><td colspan="4" class="text-center" style="color:var(--danger-600)">${escapeHtml(err.message)}</td></tr>`;
+            body.innerHTML = `<tr><td colspan="5" class="text-center" style="color:var(--danger-600)">${escapeHtml(err.message)}</td></tr>`;
+        }
+    }
+
+    async function deleteHistoryRow(jobId) {
+        const confirmed = await modal({
+            title: "Delete this history row?",
+            message: "This removes it from History. The generated video file on disk, if any, is not deleted.",
+            kind: "warn", confirmText: "Delete", cancelText: "Cancel", danger: true,
+        });
+        if (!confirmed) return;
+        try {
+            await api(`/api/content-jobs/${jobId}`, { method: "DELETE" });
+            await loadContentHistory();
+        } catch (err) {
+            toast(`Delete failed: ${err.message}`, "error", 5000);
+        }
+    }
+
+    async function retryHistoryRow(jobId) {
+        try {
+            await api(`/api/content-jobs/${jobId}/regenerate`, { body: {} });
+            await loadContentHistory();
+            // Reuses the exact same generation stream Generate Approved
+            // uses -- amazon_video_maker.py already resumes an interrupted
+            // keyword from its existing project folder instead of starting
+            // over (the `resuming` check where it builds base_dir), so
+            // re-queuing this one keyword IS "retry from where it stopped".
+            await startGeneration({ videoCount: 1 });
+        } catch (err) {
+            toast(`Retry failed: ${err.message}`, "error", 5000);
         }
     }
 
@@ -789,6 +887,11 @@
                 finish();
                 logArea.textContent += "\n--- PROCESS COMPLETED ---";
                 setProgress(100, "Completed");
+                // The Watch button (and Status badge) used to only appear
+                // after a manual page reload. The server has already
+                // resolved every job's render outcome by the time __DONE__
+                // is sent (record_generation_results runs before that yield).
+                loadContentHistory();
                 if (logArea.textContent.includes("[QUOTA REACHED]")) {
                     modal({ title: "Quota exceeded", message: `Process stopped because you hit your limit. Videos created this session: ${sessionVideoCount}.`, kind: "error", confirmText: "OK" });
                 } else if (failedKeywords.length && sessionVideoCount > 0) {
@@ -810,6 +913,10 @@
             } else if (line.startsWith("__SESSION_COUNT__:")) {
                 sessionVideoCount = parseInt(line.split(":")[1], 10);
                 if (videoCountDisplay) videoCountDisplay.textContent = `${sessionVideoCount}/${total}`;
+                // Fires once per video that actually finished -- refresh
+                // History now instead of making the user wait for the
+                // whole batch (or a reload) to see this one's Watch link.
+                loadContentHistory();
             } else if (line.startsWith("__FAILED_KEYWORDS__:")) {
                 failedKeywords = line.slice("__FAILED_KEYWORDS__:".length).split(",").filter(Boolean);
             } else {
@@ -858,6 +965,13 @@
         updateContentUrlCount();
         loadLatestContentBatch();
         loadContentHistory();
+        $("#contentHistoryBody")?.addEventListener("click", (e) => {
+            const btn = e.target.closest("[data-history-action]");
+            if (!btn) return;
+            const jobId = btn.dataset.jobId;
+            if (btn.dataset.historyAction === "delete") deleteHistoryRow(jobId);
+            else if (btn.dataset.historyAction === "retry") retryHistoryRow(jobId);
+        });
 
         $$("input, textarea, select").forEach((el) => {
             if (!el.id || el.dataset.setting === "false" || el.dataset.noAutosave === "1") return;
@@ -870,6 +984,14 @@
         $("#approveAllBtn")?.addEventListener("click", approveAllReadyJobs);
         $("#refreshBatchBtn")?.addEventListener("click", refreshContentBatch);
         $("#generateApprovedBtn")?.addEventListener("click", generateApprovedBatch);
+        $("#deleteSelectedJobsBtn")?.addEventListener("click", deleteSelectedJobs);
+        $("#selectAllJobsCheckbox")?.addEventListener("change", (e) => {
+            selectedJobIds.clear();
+            if (e.target.checked) {
+                (currentContentBatch?.jobs || []).forEach((j) => selectedJobIds.add(j.jobId));
+            }
+            renderContentBatch(currentContentBatch);
+        });
 
         $("#keywords_asin")?.addEventListener("input", updateASINStats);
         $("#validateAsinsBtn")?.addEventListener("click", validateAsins);
