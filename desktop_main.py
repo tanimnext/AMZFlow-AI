@@ -37,6 +37,14 @@ def main() -> int:
 
     import app as application
 
+    # The packaged app starts here, not through app.py's __main__ block, so
+    # the settings migration has to be invoked on this path too -- otherwise
+    # it would only ever run for people launching from source.
+    try:
+        application.migrate_superseded_defaults()
+    except Exception as exc:  # never block startup over a settings tidy-up
+        print(f"[SETTINGS][WARN] Default migration skipped: {exc}")
+
     host, port = "127.0.0.1", 7503
     application.open_browser_after_start(f"http://{host}:{port}")
     application.app.run(debug=False, host=host, port=port, use_reloader=False)

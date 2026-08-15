@@ -97,10 +97,15 @@
                 <label class="switch"><input id="enable_intro_clip" type="checkbox"><span class="slider"></span></label>
             </div>
             <div class="switch-row">
-                <span class="switch-text">Burn in captions</span>
+                <span class="switch-text">Key-point captions</span>
                 <label class="switch"><input id="captions_enabled" type="checkbox"><span class="slider"></span></label>
             </div>
-            <p class="hint">A <span class="mono">captions.srt</span> file is always saved next to the video. Turning this on additionally burns the text into the picture -- automatically moved below the product title so the two never overlap. Font/color/position are in Settings &gt; Visual Style.</p>
+            <p class="hint">Types each product's key spec points into a bar directly under the product title &mdash; same design, one size smaller, with keystroke ticks. A <span class="mono">captions.srt</span> file is always saved next to the video either way.</p>
+            <div class="switch-row">
+                <span class="switch-text">AI intro &amp; conclusion</span>
+                <label class="switch"><input id="ai_intro_outro" type="checkbox"><span class="slider"></span></label>
+            </div>
+            <p class="hint">Writes the opener and closing per video instead of using the fixed template: a hook on the buyer's problem, what the picks were compared on, then straight into the list &mdash; and a close that names a best overall, a best value, and a pick for a specific need before the description CTA. Costs two extra LLM calls per video; falls back to the template if the model is unavailable.</p>
         </div>
     </div>
 

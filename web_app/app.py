@@ -251,15 +251,44 @@ SCOPES = [
     'https://www.googleapis.com/auth/youtube.force-ssl',
 ]
 
-def get_settings():
-    if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
+def _template_settings():
     template = os.path.join(BASE_DIR, "settings.json")
-    if os.path.exists(template):
+    try:
         with open(template, 'r', encoding='utf-8') as f:
             return json.load(f)
-    return {}
+    except (OSError, ValueError):
+        return {}
+
+
+def get_settings():
+    """Saved settings, with any key the shipped template has but this
+    install's file does not filled in from the template.
+
+    Without this merge, a setting added in a new version simply never
+    reached an existing install: the file was written before that key
+    existed, so it stayed absent forever. Worse, the Settings page renders
+    from these values, and an HTML `<input type="color">` with no value
+    shows #000000 while `<input type="number">` shows "" -- so the next
+    save wrote BLACK and EMPTY over the intended shipped defaults. That is
+    exactly how a fresh "captions" feature ended up rendering black text at
+    no configured size on an upgraded install.
+
+    Only MISSING keys are filled. A key the user has actually set -- even to
+    an empty string, which is a legitimate "off" for things like a logo
+    line -- is left exactly as they saved it.
+    """
+    if not os.path.exists(SETTINGS_FILE):
+        return _template_settings()
+    try:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return _template_settings()
+    if not isinstance(saved, dict):
+        return _template_settings()
+    merged = dict(_template_settings())
+    merged.update(saved)
+    return merged
 
 
 def _template_setting_keys():
@@ -286,6 +315,50 @@ def save_settings(data):
     current.update(data)
     atomic_json(PRIVATE_SETTINGS_FILE, current)
     os.chmod(PRIVATE_SETTINGS_FILE, 0o600)
+
+
+SETTINGS_MIGRATION_VERSION_KEY = "settings_migration_version"
+CURRENT_SETTINGS_MIGRATION = 1
+# key -> (superseded shipped default, new shipped default).
+# Only rewritten when the saved value is STILL the old default, i.e. the user
+# never chose it -- they just inherited it. A value they actually picked is
+# never touched. Filling in missing keys is get_settings()'s job; this exists
+# for the different case where the key is present but stale.
+SUPERSEDED_DEFAULTS = {
+    "outro_title_bg_enable": (False, True),
+    "outro_title_bg_color": ("#e20390", "#f97316"),
+}
+
+
+def migrate_superseded_defaults():
+    """One-time, idempotent bump of never-customized defaults."""
+    if not os.path.exists(SETTINGS_FILE):
+        return {}
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as handle:
+            saved = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(saved, dict):
+        return {}
+    if int(saved.get(SETTINGS_MIGRATION_VERSION_KEY, 0) or 0) >= CURRENT_SETTINGS_MIGRATION:
+        return {}
+
+    changed = {}
+    for key, (old_default, new_default) in SUPERSEDED_DEFAULTS.items():
+        if key in saved and saved[key] == old_default:
+            changed[key] = new_default
+    saved.update(changed)
+    saved[SETTINGS_MIGRATION_VERSION_KEY] = CURRENT_SETTINGS_MIGRATION
+    try:
+        atomic_json(PRIVATE_SETTINGS_FILE, saved)
+        os.chmod(PRIVATE_SETTINGS_FILE, 0o600)
+    except OSError as exc:
+        print(f"[SETTINGS][WARN] Could not persist default migration: {exc}")
+        return {}
+    if changed:
+        print(f"[SETTINGS] Updated never-customized defaults: {', '.join(sorted(changed))}")
+    return changed
 
 
 CONTENT_BATCH_STORE = None
@@ -2842,5 +2915,11 @@ def open_browser_after_start(url, delay=1.0):
 if __name__ == '__main__':
     host = "127.0.0.1"
     port = 7503
+    # Before serving anything: an upgraded install may still carry defaults
+    # that a newer version has since changed.
+    try:
+        migrate_superseded_defaults()
+    except Exception as exc:  # never block startup over a settings tidy-up
+        print(f"[SETTINGS][WARN] Default migration skipped: {exc}")
     open_browser_after_start(f"http://{host}:{port}")
     app.run(debug=False, host=host, port=port)

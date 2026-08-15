@@ -25,6 +25,7 @@ if sys.stdout.encoding.lower() != 'utf-8':
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import asyncio
+import math
 import subprocess
 import glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -111,6 +112,13 @@ RANK_SLIDE_SECONDS = 3.0
 MUSIC_BED_TARGET_DBFS = -32.0
 # Used only when a track's level can't be measured at all.
 MUSIC_BED_FALLBACK_GAIN_DB = -24.0
+# Keystroke ticks under the typed caption bar. Quiet on purpose -- it is a
+# texture behind narration, not a sound effect competing with it.
+TYPING_SFX_GAIN = 0.22
+# Opt-in: write the opener/closer per video with the LLM instead of the
+# fixed template. Off by default -- it costs two extra LLM calls per video
+# and the template output is predictable, which some users prefer.
+AI_INTRO_OUTRO = False
 # On-screen captions. Off by default: burning them in costs a full extra
 # encode pass, and the .srt sidecar is always written regardless.
 # Two alternating narrators. Off by default: one voice is the normal
@@ -292,7 +300,7 @@ def load_settings_from_external():
     global GEMINI_API_KEYS, GEMINI_MODEL, OPENAI_API_KEYS, OPENAI_MODEL, OPENROUTER_API_KEYS, OPENROUTER_MODEL, DEEPSEEK_API_KEYS, DEEPSEEK_MODEL, DEEPSEEK_ENDPOINT
     global VERTEX_PROJECT_ID, VERTEX_LOCATION, VERTEX_SERVICE_ACCOUNT_JSON, VERTEX_LLM_MODEL, VERTEX_TTS_MODEL
     global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW, LLM_TIMEOUT_SECONDS
-    global RANK_SLIDE_SECONDS, NARRATION_SPEED
+    global RANK_SLIDE_SECONDS, NARRATION_SPEED, AI_INTRO_OUTRO
     global DUAL_VOICE_ENABLED, DUAL_VOICE_SECOND
     global CAPTIONS_ENABLED, CAPTIONS_FONT_SIZE, CAPTIONS_POSITION
     global COLOR_CAPTIONS_TEXT, COLOR_CAPTIONS_OUTLINE, COLOR_CAPTIONS_BG, VAL_CAPTIONS_BG_OPACITY
@@ -362,6 +370,7 @@ def load_settings_from_external():
                 LLM_TIMEOUT_SECONDS = _positive_int(s.get('llm_timeout_seconds'), LLM_TIMEOUT_SECONDS)
                 RANK_SLIDE_SECONDS = _positive_float(s.get('rank_slide_seconds'), RANK_SLIDE_SECONDS, 0.5, 15.0)
                 NARRATION_SPEED = _positive_float(s.get('narration_speed'), NARRATION_SPEED, 0.5, 2.0)
+                AI_INTRO_OUTRO = bool(s.get('ai_intro_outro', AI_INTRO_OUTRO))
                 DUAL_VOICE_ENABLED = bool(s.get('dual_voice_enabled', DUAL_VOICE_ENABLED))
                 DUAL_VOICE_SECOND = str(s.get('dual_voice_second', DUAL_VOICE_SECOND) or '').strip()
                 CAPTIONS_ENABLED = bool(s.get('captions_enabled', CAPTIONS_ENABLED))
@@ -685,6 +694,48 @@ def apply_video_speed(input_path, duration, base_dir, speed=None):
         try: os.remove(input_path)
         except OSError: pass
     return output_path, new_duration
+
+
+def _caption_points_for_overlay(points, max_points=4, max_chars=52):
+    """Trim key points to what fits on ONE line of the caption bar.
+
+    The bar sits under the product title and is deliberately a single line
+    -- a wrapping caption would grow into the footage and reintroduce
+    exactly the screen-filling problem the burned-in SRT had.
+    """
+    out = []
+    for raw in points or []:
+        point = re.sub(r"\s+", " ", str(raw or "")).strip(" .;:-•")
+        if not point:
+            continue
+        if len(point) > max_chars:
+            point = point[:max_chars].rsplit(" ", 1)[0].strip()
+        if point:
+            out.append(point)
+        if len(out) >= max_points:
+            break
+    return out
+
+
+def _typewriter_reveal_steps(text, max_steps=26):
+    """Cumulative prefixes of `text`, for a keyboard-style reveal.
+
+    Capped rather than one-per-character: each step becomes its own
+    drawtext filter, and an unbounded count would put hundreds of filters
+    into a single filtergraph for no visible benefit.
+    """
+    text = str(text or "")
+    if not text:
+        return []
+    steps = min(len(text), max_steps)
+    per_step = max(1, math.ceil(len(text) / steps))
+    prefixes = []
+    cursor = per_step
+    while cursor < len(text):
+        prefixes.append(text[:cursor])
+        cursor += per_step
+    prefixes.append(text)
+    return prefixes
 
 
 def product_caption_points(product, narration_text="", max_points=5, max_chars=70):
@@ -1386,7 +1437,7 @@ def _evenly_spaced_indices(total, count=3):
     return {round(i * (total - 1) / (count - 1)) for i in range(count)}
 
 
-def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, output_path, branding_filters=None, header_text=None, tail_pad=0.0, show_cta=True):
+def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, output_path, branding_filters=None, header_text=None, tail_pad=0.0, show_cta=True, caption_key_points=None):
     """Creates a product segment (video or slideshow) with audio and title overlay."""
     global COLOR_PRODUCT_TITLE, COLOR_PRODUCT_BG, VAL_PRODUCT_BG_OPACITY, COLOR_BLUEBAR
     global COLOR_LINK_CHECK_TEXT, COLOR_LINK_CHECK_BG
@@ -1655,12 +1706,17 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         filter_base = "[0:v]null[bg]"
         audio_idx = 1
 
+    # Populated by the caption bar below (if there is one); read much later
+    # when the audio chain is assembled, so it has to exist either way.
+    typing_windows = []
+
     # 3. Add Title Overlay (News Style)
-    # Skipped when burned-in captions are on: this ticker (title box + blue
-    # bar + CTA banner + section header) lives in the same bottom band the
-    # caption text uses, and both fighting for that space read worse than
-    # either alone. Captions carry the on-screen text instead.
-    if clean_title and not CAPTIONS_ENABLED:
+    # Captions no longer replace this. They render as a second, smaller bar
+    # directly beneath it in the same visual language (see the caption block
+    # further down), and the whole stack is lifted to make room -- so the
+    # product title and its key points read as one unit instead of two
+    # elements fighting for the same band.
+    if clean_title:
         # Pixel constants below are tuned for the legacy 720x1280/1280x720
         # canvas; TEXT_SCALE keeps every dimension proportional on the new
         # 1080x1920/1920x1080 output instead of shrinking relative to frame.
@@ -1697,10 +1753,26 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         cta_total_h = cta_font_size + (cta_box_p * 2) + round(8 * S)
         header_total_h = round(46 * S) if header_text else 0
         edge_pad = round(24 * S)
+
+        # --- Key-point caption bar (sits directly under the title) ---
+        # One step smaller than the title, same box + accent-bar language, so
+        # the two read as a single stacked unit rather than competing
+        # overlays. Everything above is lifted by exactly this bar's height
+        # so the block still ends where it used to.
+        caption_points = _caption_points_for_overlay(caption_key_points) if CAPTIONS_ENABLED else []
+        caption_font_size = round(title_font_size * 0.78)
+        caption_box_p = round(12 * S)
+        caption_gap = round(8 * S)
+        caption_h = caption_font_size + (caption_box_p * 2) if caption_points else 0
+        caption_block_h = (caption_h + caption_gap) if caption_points else 0
+
         y_pos = min(
             frame_h - edge_pad,
-            max(bottom_margin, overlay_h + cta_total_h + header_total_h + edge_pad),
-        )
+            max(
+                bottom_margin,
+                overlay_h + cta_total_h + header_total_h + edge_pad,
+            ),
+        ) + caption_block_h
         
         # Entrance/Exit timings
         bg_in_s, bg_in_e = 0.5, 1.0
@@ -1739,12 +1811,16 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         txt_rel_x = f"if(lt(t, {txt_in_e}), -text_w+(t-{txt_in_s})*2*text_w, if(lt(t, {txt_out_s}), {text_edge_pad}, {text_edge_pad}-(t-{txt_out_s})*2*text_w))"
 
         # CTA Slide Up Logic
+        # Sits below the caption bar, not on top of it: caption_block_h is 0
+        # when there are no key points, so this is the original position
+        # whenever captions are off.
         cta_gap = round((10 if SHORTS_MODE else 8) * S)
+        cta_y_px = y_pos - overlay_h - caption_block_h - cta_gap
         if SHORTS_MODE:
-            cta_y_expr = f"if(lt(t, {cta_in_s}+0.5), H, H-{y_pos-overlay_h-cta_gap})"
+            cta_y_expr = f"if(lt(t, {cta_in_s}+0.5), H, H-{cta_y_px})"
             cta_x_pos = round(60 * S)
         else:
-            cta_y_expr = f"if(lt(t, {cta_in_s}+0.5), H, H-{y_pos-overlay_h-cta_gap})"
+            cta_y_expr = f"if(lt(t, {cta_in_s}+0.5), H, H-{cta_y_px})"
             cta_x_pos = round(72 * S)
 
         # Sink logic: moves down/up when title moves
@@ -1792,9 +1868,65 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         text_draw = "[txt_layer]" + ",".join(title_line_draws) + "[txt_segment]"
         text_ovl = f"[with_blue][txt_segment]overlay=x={txt_layer_x}:y={y_coord}:enable='between(t,{txt_in_s},{duration})'[v_title]"
 
+        # --- Key-point caption bar, typed out under the title ---
+        # Each point gets an equal slice of the segment and is revealed a few
+        # characters at a time. Exactly one prefix is enabled at any instant
+        # (each step owns a half-open window), so the prefixes never stack on
+        # top of each other -- which is what makes it read as typing rather
+        # than as overlapping text.
+        caption_chain_in = "v_title"
+        caption_draws = []
+        caption_windows = []
+        if caption_points:
+            # drawtext exposes the output height as `H`; drawbox does not --
+            # it only knows `ih`. Same pixel row, two spellings.
+            caption_y_px = y_pos - overlay_h - caption_gap
+            caption_y = f"H-{caption_y_px}"
+            caption_y_box = f"ih-{caption_y_px}"
+            caption_start = txt_in_e + 0.2
+            caption_end = max(caption_start + 0.5, bg_out_s)
+            per_point = (caption_end - caption_start) / len(caption_points)
+            for point_index, point in enumerate(caption_points):
+                point_start = caption_start + point_index * per_point
+                point_end = point_start + per_point
+                caption_windows.append((point_start, point_end))
+                steps = _typewriter_reveal_steps(point)
+                if not steps:
+                    continue
+                # Type over the first 45% of the slot, hold the rest.
+                type_span = per_point * 0.45
+                step_dt = type_span / len(steps)
+                typing_windows.append((point_start, point_start + type_span))
+                for step_index, prefix in enumerate(steps):
+                    step_start = point_start + step_index * step_dt
+                    is_last = step_index == len(steps) - 1
+                    step_end = point_end if is_last else step_start + step_dt
+                    caption_draws.append(
+                        f"drawtext=fontfile='{font_path}':text='{sanitize_text(prefix)}':"
+                        f"fontsize={caption_font_size}:fontcolor={prod_title_color}:"
+                        f"box=1:boxcolor={prod_box_color}@{VAL_PRODUCT_BG_OPACITY}:"
+                        f"boxborderw={caption_box_p}:x={txt_layer_x + text_edge_pad}:"
+                        f"y='{caption_y}':enable='between(t,{step_start:.3f},{step_end:.3f})'"
+                    )
+        if caption_draws:
+            # Accent bar matching the title's, spanning the caption's whole
+            # on-screen life so the two bars line up as one unit.
+            caption_bar_in = caption_windows[0][0]
+            caption_bar_out = caption_windows[-1][1]
+            caption_draws.insert(
+                0,
+                f"drawbox=x={blue_x_base}:y='{caption_y_box}':w={blue_bar_w}:h={caption_h}:"
+                f"color={blue_bar_color}@1.0:t=fill:"
+                f"enable='between(t,{caption_bar_in:.3f},{caption_bar_out:.3f})'",
+            )
+            caption_draw = f"[v_title]" + ",".join(caption_draws) + "[v_caption]"
+            caption_chain_in = "v_caption"
+        else:
+            caption_draw = None
+
         # Add the CTA (Call to Action) text
         cta_draw = (
-            f"[v_title]drawtext=fontfile='{font_path}':text='{cta_text}':fontsize={cta_font_size}:fontcolor={cta_txt_color}:"
+            f"[{caption_chain_in}]drawtext=fontfile='{font_path}':text='{cta_text}':fontsize={cta_font_size}:fontcolor={cta_txt_color}:"
             f"box=1:boxcolor={cta_bg_color}@{VAL_INTRO_OVERLAY_OPACITY}:boxborderw={cta_box_p}:x={cta_x_pos}:y='{cta_final_y}':enable='{cta_enable_window}'[v_cta]"
         )
 
@@ -1813,9 +1945,11 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
                 f"[v_cta]drawtext=fontfile='{font_path}':text='{sanitize_text(header_text).upper()}':fontsize={header_font_size}:fontcolor=white:"
                 f"box=1:boxcolor=0x800080@1.0:boxborderw={header_box_p}:x='{header_x}':y={y_coord}-{header_gap}:enable='between(t,{bg_in_s},{bg_out_s})'[v_branded]"
             )
-            filter_complex = f"{filter_base}; {blue_bar_gen}; {blue_bar_ovl}; {text_layer_gen}; {text_draw}; {text_ovl}; {cta_draw}; {header_draw}"
+        caption_stage = f"{caption_draw}; " if caption_draw else ""
+        if header_text:
+            filter_complex = f"{filter_base}; {blue_bar_gen}; {blue_bar_ovl}; {text_layer_gen}; {text_draw}; {text_ovl}; {caption_stage}{cta_draw}; {header_draw}"
         else:
-            filter_complex = f"{filter_base}; {blue_bar_gen}; {blue_bar_ovl}; {text_layer_gen}; {text_draw}; {text_ovl}; {cta_draw}; [v_cta]null[v_branded]"
+            filter_complex = f"{filter_base}; {blue_bar_gen}; {blue_bar_ovl}; {text_layer_gen}; {text_draw}; {text_ovl}; {caption_stage}{cta_draw}; [v_cta]null[v_branded]"
         
         # Append branding filters if any
         if branding_filters:
@@ -1869,19 +2003,37 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
     else:
         filter_complex += "; [v_prebadge]null[v]"
 
-    cmd.extend([
-        "-filter_complex", filter_complex,
-        "-map", "[v]", "-map", f"{audio_idx}:a",
-    ])
     # Every segment gets one continuous, exact-length 48 kHz audio clock.
     # This prevents cumulative gaps/drift when many segments are concatenated.
-    cmd.extend([
-        "-af",
-        (
-            f"aresample={AUDIO_SAMPLE_RATE}:async=1:first_pts=0,"
-            f"apad=whole_dur={duration},atrim=duration={duration}"
-        ),
-    ])
+    voice_chain = (
+        f"aresample={AUDIO_SAMPLE_RATE}:async=1:first_pts=0,"
+        f"apad=whole_dur={duration},atrim=duration={duration}"
+    )
+    typing_loop = os.path.join(os.path.dirname(__file__), "sfx", "keytype_loop.wav")
+    if typing_windows and os.path.isfile(typing_loop):
+        # Keystroke ticks under the caption reveal. The loop runs the whole
+        # segment and is muted outside the typing spans -- one gated input
+        # rather than a separate delayed click per character, which would
+        # mean hundreds of filters for the same result.
+        typing_idx = sum(1 for a in cmd if a == "-i")
+        cmd.extend(["-stream_loop", "-1", "-i", typing_loop])
+        inside = "+".join(
+            f"between(t,{start:.3f},{end:.3f})" for start, end in typing_windows
+        )
+        filter_complex += (
+            f"; [{audio_idx}:a]{voice_chain}[voice_a]"
+            f"; [{typing_idx}:a]aresample={AUDIO_SAMPLE_RATE},"
+            f"volume=0:enable='eq(0,{inside})',volume={TYPING_SFX_GAIN},"
+            f"apad=whole_dur={duration},atrim=duration={duration}[key_a]"
+            f"; [voice_a][key_a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"
+        )
+        cmd.extend(["-filter_complex", filter_complex, "-map", "[v]", "-map", "[aout]"])
+    else:
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[v]", "-map", f"{audio_idx}:a",
+        ])
+        cmd.extend(["-af", voice_chain])
     cmd.extend([
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "2",
@@ -2684,6 +2836,91 @@ def _chunk_text_for_tts(text, max_chars=1200):
     if current:
         chunks.append(current)
     return chunks or [text]
+
+
+def _short_title(title, limit=7):
+    words = [w for w in str(title or "").split() if w]
+    return " ".join(words[:limit]) if words else ""
+
+
+def build_ai_intro_text(human_kw, processed, is_single):
+    """LLM-written opener following the retention structure that actually
+    works for a "best X" affiliate video: hook the buyer's problem, promise
+    what the video delivers, reassure the list isn't random, then get out of
+    the way fast.
+
+    Opt-in (AI_INTRO_OUTRO). Returns "" if the model gives nothing usable,
+    so the caller can fall back to the fixed template rather than ship an
+    empty opener.
+    """
+    count = len(processed or [])
+    names = [_short_title(p.get("title"), 6) for p in (processed or [])[:5]]
+    prompt = f"""TASK: Write the spoken OPENING of a YouTube product review video.
+
+TOPIC: {human_kw}
+NUMBER OF PRODUCTS: {count}
+PRODUCTS: {'; '.join(n for n in names if n) or 'not listed'}
+FORMAT: {'single product review' if is_single else f'top {count} roundup'}
+
+Write 45-70 words, in this order, with NO labels or headings:
+1. A hook naming the viewer's actual problem or search, phrased as a
+   question or a direct statement.
+2. What this video gives them -- say what the picks were compared on
+   (performance, features, ease of use, value).
+3. One line making clear the list is considered, not random: whatever
+   they specifically need, there's a pick here for them.
+4. A short push straight into the list. Nothing else after it.
+
+RULES:
+- American English, spoken register, contractions, short sentences.
+- Do NOT mention links, the description, prices, liking or subscribing.
+- Do NOT invent specs, test results, awards or comparisons.
+- No markdown, no numbering, no stage directions. Prose only.
+- Output ONLY the words to be spoken."""
+    text = strip_script_artifacts(call_llm_local(prompt))
+    return " ".join(text.split()) if text else ""
+
+
+def build_ai_conclusion_text(human_kw, processed, is_single):
+    """LLM-written close: a real buying recommendation instead of a generic
+    sign-off. Names a best overall / best value / best for a specific need,
+    then the description CTA and an engagement ask.
+
+    Opt-in (AI_INTRO_OUTRO); "" means the caller should fall back."""
+    ranked = sorted(
+        (p for p in (processed or []) if p.get("title")),
+        key=lambda p: p.get("rank", 999),
+    )
+    listing = "\n".join(
+        f"- rank {p.get('rank', '?')}: {_short_title(p.get('title'), 8)}"
+        for p in ranked[:10]
+    ) or "- (no products listed)"
+    prompt = f"""TASK: Write the spoken CLOSING of a YouTube product review video.
+
+TOPIC: {human_kw}
+FORMAT: {'single product review' if is_single else 'multi-product roundup'}
+PRODUCTS (rank 1 is the top pick):
+{listing}
+
+Write 45-75 words, in this order, with NO labels or headings:
+1. A one-line "so which should you get?" turn.
+2. {'A clear verdict on whether this one is worth buying, and who for.'
+   if is_single else
+   'Name the best overall pick, then a best-value pick, then one pick for a '
+   'specific kind of buyer. Use the product names given above -- do not '
+   'invent products or reorder the ranking.'}
+3. Tell them links to every product are in the description so they can
+   check current prices.
+4. A short like-and-subscribe ask.
+
+RULES:
+- American English, spoken register, contractions, short sentences.
+- Do NOT invent specs, prices, test results or awards.
+- Do NOT state a price -- prices change; say to check the link instead.
+- No markdown, no numbering, no stage directions. Prose only.
+- Output ONLY the words to be spoken."""
+    text = strip_script_artifacts(call_llm_local(prompt))
+    return " ".join(text.split()) if text else ""
 
 
 def build_conclusion_text(human_kw, processed, is_single, top_pick_title=None):
@@ -3848,7 +4085,29 @@ async def main_pipeline():
                     )
             else:
                 outro_txt = build_conclusion_text(human_kw, processed, is_single, top_pick_title)
-        
+
+        # Opt-in AI opener/closer. Written per video from the actual product
+        # list instead of the fixed template, following the hook -> promise
+        # -> reassurance -> "let's get into it" structure that holds
+        # retention in the first 20 seconds. Anything that comes back empty
+        # (LLM down, all providers exhausted) falls through to the template
+        # text already computed above -- a missing opener is far worse than
+        # a generic one.
+        if AI_INTRO_OUTRO:
+            print("[SCRIPT] Writing AI intro/conclusion...")
+            ai_intro = build_ai_intro_text(human_kw, processed, is_single)
+            if ai_intro:
+                # Keep the title spoken first so the video still opens on the
+                # keyword YouTube matched the viewer against.
+                intro_txt = f"{display_title}. {ai_intro}"
+            else:
+                print("[SCRIPT][WARN] AI intro unavailable; using the template opener.")
+            ai_outro = build_ai_conclusion_text(human_kw, processed, is_single)
+            if ai_outro:
+                outro_txt = ai_outro
+            else:
+                print("[SCRIPT][WARN] AI conclusion unavailable; using the template close.")
+
         intro_aud = os.path.join(base_dir, "intro.mp3")
         outro_aud = os.path.join(base_dir, "outro.mp3")
         
@@ -4148,14 +4407,14 @@ async def main_pipeline():
                     return create_text_slide_ffmpeg(str(seg['rank']), seg['audio'], os.path.join(base_dir, f"segment_{seg['rank']}_rank.mp4"), bg_path=r_bg, is_rank=True, branding_filters=b_filters)
                 elif seg['type'] == 'product':
                     p = seg['product']
-                    return create_product_segment_ffmpeg(p['video'], p['images'], seg['audios'], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_product.mp4"), branding_filters=b_filters, show_cta=seg.get('show_cta', True))
+                    return create_product_segment_ffmpeg(p['video'], p['images'], seg['audios'], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_product.mp4"), branding_filters=b_filters, show_cta=seg.get('show_cta', True), caption_key_points=p.get('features'))
                 elif seg['type'] == 'product_part':
                     p = seg['product']
                     # Render a specific part of the product review with current section header
                     # Pass the 'header' from the segment data. tail_pad=1.0 matches the
                     # timeline's `part_dur = audio + 1.0` cinematic buffer (see slide_duration
                     # docstring for why this needs to match on both sides).
-                    return create_product_segment_ffmpeg(p['video'], p['images'], [seg['audio']], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_part_{idx}.mp4"), branding_filters=b_filters, header_text=seg.get('header'), tail_pad=1.0, show_cta=seg.get('show_cta', True))
+                    return create_product_segment_ffmpeg(p['video'], p['images'], [seg['audio']], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_part_{idx}.mp4"), branding_filters=b_filters, header_text=seg.get('header'), tail_pad=1.0, show_cta=seg.get('show_cta', True), caption_key_points=p.get('features'))
                 elif seg['type'] == 'outro':
                     return create_text_slide_ffmpeg(seg['data'][0], seg['data'][1], os.path.join(base_dir, "segment_final_outro.mp4"), bg_path=seg['data'][2], branding_filters=b_filters, is_outro_single=seg.get('is_outro_single', False))
             except Exception as e:
@@ -4313,8 +4572,14 @@ async def main_pipeline():
         # below needs the .srt, and it has to happen before the music mix
         # (which stream-copies the video track and would otherwise have to
         # be redone). Timestamps are already post-speed.
-        captions_srt_path = write_captions_srt(base_dir, timeline_segments, VIDEO_SPEED)
-        final_output = burn_captions(final_output, captions_srt_path, base_dir)
+        # The .srt sidecar is always written (YouTube can use it, and it
+        # costs nothing). Burning it into the picture is NOT done anymore:
+        # key points now render as a typed bar under the product title
+        # inside each segment, which is what "captions" means here. Burning
+        # the full narration on top of that would put two competing blocks
+        # of text on screen -- the exact overlap that made the old output
+        # unreadable.
+        write_captions_srt(base_dir, timeline_segments, VIDEO_SPEED)
 
         # --- Background Music Check ---
         selected_music = None

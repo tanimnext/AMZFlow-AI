@@ -208,6 +208,88 @@ class DualVoiceTests(unittest.TestCase):
                              ["primary"] * 3)
 
 
+class AiIntroConclusionTests(unittest.TestCase):
+    """Opt-in AI opener/closer. The template versions are fixed text; these
+    are written per video from the real product list, following the
+    hook -> promise -> reassurance -> "let's go" retention structure."""
+
+    PRODUCTS = [
+        {"rank": 1, "title": "Banks Ram Air Cold Air Intake System"},
+        {"rank": 2, "title": "S&B Filters Cold Air Intake Kit"},
+        {"rank": 3, "title": "aFe Power Momentum HD Intake"},
+    ]
+
+    def _capture_prompt(self, builder, reply="Some spoken opener text here."):
+        seen = {}
+
+        def fake(prompt):
+            seen["prompt"] = prompt
+            return reply
+
+        with unittest.mock.patch.object(avm, "call_llm_local", fake):
+            result = builder()
+        return seen.get("prompt", ""), result
+
+    def test_intro_prompt_includes_the_real_products_and_topic(self):
+        prompt, _ = self._capture_prompt(
+            lambda: avm.build_ai_intro_text("Best Cold Air Intakes", self.PRODUCTS, False)
+        )
+        self.assertIn("Best Cold Air Intakes", prompt)
+        self.assertIn("Banks", prompt)
+        self.assertIn("aFe", prompt)
+
+    def test_intro_prompt_forbids_the_cta_that_the_closing_owns(self):
+        # Both sections pitching the description produced the same ask twice
+        # in one video.
+        prompt, _ = self._capture_prompt(
+            lambda: avm.build_ai_intro_text("Widgets", self.PRODUCTS, False)
+        )
+        self.assertIn("Do NOT mention links", prompt)
+
+    def test_conclusion_prompt_ranks_products_and_bans_invented_prices(self):
+        prompt, _ = self._capture_prompt(
+            lambda: avm.build_ai_conclusion_text("Widgets", self.PRODUCTS, False)
+        )
+        self.assertIn("rank 1", prompt)
+        self.assertIn("do not", prompt.lower())
+        self.assertIn("Do NOT state a price", prompt)
+
+    def test_single_product_conclusion_asks_for_a_verdict_not_a_ranking(self):
+        prompt, _ = self._capture_prompt(
+            lambda: avm.build_ai_conclusion_text("One Widget", self.PRODUCTS[:1], True)
+        )
+        self.assertIn("worth buying", prompt)
+        self.assertNotIn("best-value pick", prompt)
+
+    def test_scaffolding_is_stripped_from_whatever_the_model_returns(self):
+        _, result = self._capture_prompt(
+            lambda: avm.build_ai_intro_text("Widgets", self.PRODUCTS, False),
+            reply="Here's the script:\n\nKey Features\n\nThe real opening line.",
+        )
+        self.assertEqual(result, "The real opening line.")
+
+    def test_empty_or_whitespace_model_output_signals_fallback(self):
+        for reply in ("", "   ", "\n\n"):
+            _, result = self._capture_prompt(
+                lambda: avm.build_ai_intro_text("Widgets", self.PRODUCTS, False), reply=reply
+            )
+            self.assertEqual(result, "", "caller relies on '' to fall back to the template")
+
+    def test_a_model_returning_only_scaffolding_also_signals_fallback(self):
+        _, result = self._capture_prompt(
+            lambda: avm.build_ai_conclusion_text("Widgets", self.PRODUCTS, False),
+            reply="Key Features\n\nFinal Verdict",
+        )
+        self.assertEqual(result, "")
+
+    def test_output_is_collapsed_to_a_single_spoken_line(self):
+        _, result = self._capture_prompt(
+            lambda: avm.build_ai_intro_text("Widgets", self.PRODUCTS, False),
+            reply="First beat here.\n\nSecond beat here.",
+        )
+        self.assertNotIn("\n", result)
+
+
 class ConclusionTests(unittest.TestCase):
     """The old outro was a bare "Check the links in description for the best
     prices" -- no recommendation, and a CTA with no reason to act on it."""

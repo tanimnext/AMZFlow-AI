@@ -1,4 +1,5 @@
 {
+    "settings_migration_version": 1,
     "llm_service": "gemini",
     "longcat_api_key": "",
     "longcat_model": "LongCat-Flash-Chat",
@@ -158,6 +159,7 @@
     "music_mode": "nature",
     "custom_music_path": "",
     "enable_intro_clip": false,
+    "ai_intro_outro": false,
     "custom_tts_providers": [],
     "partner_tags": [],
     "llm_model_presets": []

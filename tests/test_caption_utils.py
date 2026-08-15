@@ -68,6 +68,48 @@ class CaptionLayoutTests(unittest.TestCase):
         self.assertEqual(wrapped.replace("\n", " ").split()[0], "alpha")
 
 
+class TypewriterCaptionBarTests(unittest.TestCase):
+    """Captions render as a typed bar under the product title now, not as a
+    burned-in SRT block that covered the frame."""
+
+    def test_reveal_steps_are_growing_prefixes_ending_in_the_full_text(self):
+        text = "176 active microdarts"
+        steps = avm._typewriter_reveal_steps(text)
+        self.assertEqual(steps[-1], text)
+        for earlier, later in zip(steps, steps[1:]):
+            self.assertTrue(later.startswith(earlier))
+            self.assertGreater(len(later), len(earlier))
+
+    def test_reveal_step_count_is_capped(self):
+        # Each step becomes its own drawtext filter; uncapped, a long line
+        # would put hundreds into one filtergraph.
+        steps = avm._typewriter_reveal_steps("x" * 400, max_steps=26)
+        self.assertLessEqual(len(steps), 26)
+        self.assertEqual(steps[-1], "x" * 400)
+
+    def test_empty_text_reveals_nothing(self):
+        self.assertEqual(avm._typewriter_reveal_steps(""), [])
+        self.assertEqual(avm._typewriter_reveal_steps(None), [])
+
+    def test_overlay_points_are_trimmed_to_one_line(self):
+        points = avm._caption_points_for_overlay(
+            ["x" * 200, "Short one"], max_chars=52
+        )
+        self.assertLessEqual(len(points[0]), 52)
+        self.assertIn("Short one", points)
+
+    def test_overlay_points_are_capped_in_number(self):
+        points = avm._caption_points_for_overlay(
+            [f"Point number {i}" for i in range(20)], max_points=4
+        )
+        self.assertEqual(len(points), 4)
+
+    def test_overlay_points_drop_empty_and_bullet_only_entries(self):
+        self.assertEqual(avm._caption_points_for_overlay(["", "  ", "•", "Real point"]),
+                         ["Real point"])
+        self.assertEqual(avm._caption_points_for_overlay(None), [])
+
+
 class ProductCaptionPointsTests(unittest.TestCase):
     """Captions duplicated the entire narration the viewer was already
     hearing. Short spec points are what captions are actually useful for."""

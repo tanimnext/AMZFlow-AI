@@ -233,6 +233,61 @@ class VisualLayoutTests(unittest.TestCase):
             self.assertEqual(result, str(branded_out))
             self.assertTrue(probe_media(branded_out, shutil.which("ffprobe"))["hasVideo"])
 
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg required")
+    def test_key_point_caption_bar_renders_with_the_title_and_typing_sfx(self):
+        # The caption bar adds ~90 drawtext filters, a drawbox using `ih`
+        # (drawbox has no `H` variable -- getting that wrong made ffmpeg
+        # reject the whole graph), and a gated audio input. Compile-checking
+        # the string proves none of that; only rendering does.
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            audio = temp_path / "voice.mp3"
+            subprocess.run(
+                [
+                    shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "sine=frequency=300:duration=8:sample_rate=44100",
+                    "-c:a", "libmp3lame", str(audio),
+                ],
+                check=True,
+            )
+            output = temp_path / "segment.mp4"
+            with unittest.mock.patch.object(avm, "CAPTIONS_ENABLED", True):
+                result = create_product_segment_ffmpeg(
+                    None, [], [str(audio)],
+                    "Peach Slices Deep Blemish Microdarts Pimple Patches",
+                    str(output),
+                    caption_key_points=[
+                        "176 active microdarts for early-stage blemishes",
+                        "Self-dissolving hydrocolloid melt technology",
+                    ],
+                )
+            self.assertEqual(result, str(output))
+            probe = probe_media(output, shutil.which("ffprobe"))
+            self.assertTrue(probe["hasVideo"])
+            self.assertTrue(probe["hasAudio"])
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg required")
+    def test_product_segment_still_renders_with_captions_off(self):
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            audio = temp_path / "voice.mp3"
+            subprocess.run(
+                [
+                    shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "sine=frequency=300:duration=4:sample_rate=44100",
+                    "-c:a", "libmp3lame", str(audio),
+                ],
+                check=True,
+            )
+            output = temp_path / "segment.mp4"
+            with unittest.mock.patch.object(avm, "CAPTIONS_ENABLED", False):
+                result = create_product_segment_ffmpeg(
+                    None, [], [str(audio)], "A Product Title", str(output),
+                    caption_key_points=["ignored when captions are off"],
+                )
+            self.assertEqual(result, str(output))
+            self.assertTrue(probe_media(output, shutil.which("ffprobe"))["hasAudio"])
+
     def test_different_titles_get_different_badge_color_variants(self):
         # The badge's color scheme is picked deterministically from the
         # product title so consecutive products in one video don't all show
