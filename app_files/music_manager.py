@@ -30,6 +30,7 @@ def select_track(
     manifest_path: str | Path,
     *,
     recent_track_ids: list[str] | None = None,
+    required_mood: str | None = None,
 ) -> dict[str, Any]:
     manifest = Path(manifest_path).resolve()
     library = manifest.parent
@@ -57,6 +58,15 @@ def select_track(
         valid.append(item)
     if not valid:
         raise ValueError("Music library has no usable licensed tracks")
+
+    if required_mood:
+        # A hard filter, not a preference: "nature" means the user asked for
+        # non-musical ambience specifically, so falling back to a melodic bed
+        # would quietly hand them the thing they opted out of.
+        restricted = [t for t in valid if required_mood in t.get("moods", [])]
+        if not restricted:
+            raise ValueError(f"Music library has no '{required_mood}' tracks")
+        valid = restricted
 
     mood = infer_mood(keyword)
     matching = [track for track in valid if mood in track.get("moods", [])]

@@ -13,6 +13,58 @@ def _timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+# Broadcast/YouTube convention: short cues, at most two lines, ~32-42
+# characters per line. One cue per SENTENCE (the old behaviour) meant a long
+# sentence rendered as one enormous block that filled the frame once burned
+# in, which is exactly what it did.
+MAX_CHARS_PER_LINE = 38
+MAX_LINES_PER_CUE = 2
+MAX_CHARS_PER_CUE = MAX_CHARS_PER_LINE * MAX_LINES_PER_CUE
+
+
+def _split_to_cues(sentence: str, limit: int = MAX_CHARS_PER_CUE) -> list[str]:
+    """Break one sentence into cue-sized pieces on word boundaries."""
+    words = sentence.split()
+    if not words:
+        return []
+    cues: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > limit and current:
+            cues.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        cues.append(current)
+    return cues
+
+
+def wrap_cue(text: str, width: int = MAX_CHARS_PER_LINE, max_lines: int = MAX_LINES_PER_CUE) -> str:
+    """Hard-wrap a cue onto at most `max_lines` lines.
+
+    SRT/ASS renderers only break on the newlines actually present in the
+    cue, so without this a long cue is laid out as a single line that the
+    renderer then overflows across the whole frame.
+    """
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if len(candidate) > width and current:
+            lines.append(current)
+            current = word
+            if len(lines) == max_lines:
+                break
+        else:
+            current = candidate
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    return "\n".join(lines)
+
+
 def build_srt(entries: list[dict]) -> str:
     captions = []
     index = 1
@@ -26,17 +78,25 @@ def build_srt(entries: list[dict]) -> str:
             for sentence in re.split(r"(?<=[.!?])\s+", text)
             if sentence.strip()
         ]
-        total_words = max(1, sum(len(sentence.split()) for sentence in sentences))
+        # Each sentence is further split into cue-sized pieces, and timing is
+        # shared out by word count across ALL pieces so the cues still track
+        # the narration.
+        pieces: list[str] = []
+        for sentence in sentences:
+            pieces.extend(_split_to_cues(sentence))
+        if not pieces:
+            continue
+        total_words = max(1, sum(len(piece.split()) for piece in pieces))
         cursor = float(entry.get("start") or 0)
         entry_end = cursor + duration
-        for sentence_index, sentence in enumerate(sentences):
-            if sentence_index == len(sentences) - 1:
+        for piece_index, piece in enumerate(pieces):
+            if piece_index == len(pieces) - 1:
                 end = entry_end
             else:
-                share = len(sentence.split()) / total_words
+                share = len(piece.split()) / total_words
                 end = min(entry_end, cursor + duration * share)
             captions.append(
-                f"{index}\n{_timestamp(cursor)} --> {_timestamp(end)}\n{sentence}\n"
+                f"{index}\n{_timestamp(cursor)} --> {_timestamp(end)}\n{wrap_cue(piece)}\n"
             )
             index += 1
             cursor = end

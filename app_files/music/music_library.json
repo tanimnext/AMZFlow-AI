@@ -1,7 +1,11 @@
 {
   "schemaVersion": 1,
-  "notes": "Bundled tracks are locally synthesized original ambient beds. Replace or extend them only with music whose license proof is retained.",
+  "notes": "Bundled tracks are locally synthesized original ambient beds (generated with ffmpeg noise sources and filters -- no third-party recordings, nothing to clear). The nature-* beds are non-musical ambience, which is the safest possible choice for monetized YouTube: there is no melody, performance or recording for Content ID to match against. Replace or extend them only with audio whose license proof is retained.",
   "tracks": [
+    {"id": "nature-rainfall", "file": "nature-rainfall.mp3", "moods": ["nature", "general", "home", "beauty"], "bpm": 0, "license": "generated-original"},
+    {"id": "nature-soft-wind", "file": "nature-soft-wind.mp3", "moods": ["nature", "general", "premium"], "bpm": 0, "license": "generated-original"},
+    {"id": "nature-flowing-stream", "file": "nature-flowing-stream.mp3", "moods": ["nature", "general", "fitness"], "bpm": 0, "license": "generated-original"},
+    {"id": "nature-calm-ambience", "file": "nature-calm-ambience.mp3", "moods": ["nature", "general", "tech"], "bpm": 0, "license": "generated-original"},
     {"id": "circuit-calm", "file": "circuit-calm.mp3", "moods": ["tech"], "bpm": 84, "license": "generated-original"},
     {"id": "digital-drift", "file": "digital-drift.mp3", "moods": ["tech"], "bpm": 92, "license": "generated-original"},
     {"id": "warm-countertop", "file": "warm-countertop.mp3", "moods": ["home"], "bpm": 76, "license": "generated-original"},

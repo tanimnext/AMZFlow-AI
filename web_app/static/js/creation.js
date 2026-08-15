@@ -522,18 +522,35 @@
 
     function buildContentReviewEditor(job) {
         const wrap = document.createElement("div");
-        wrap.dataset.jobId = job.jobId;
+        // Deliberately NOT data-job-id: the row checkbox and the History
+        // rows/buttons also carry data-job-id, and they appear earlier in
+        // the document, so a `[data-job-id="..."]` lookup returned the
+        // checkbox instead of this editor -- every .review-keyword lookup
+        // then hit null and Save/Approve died with "Cannot read properties
+        // of null (reading 'value')".
+        wrap.dataset.reviewEditor = job.jobId;
         wrap.className = "grid grid-cols-1 lg:grid-cols-3 gap-4";
         wrap.innerHTML = `
             <div class="space-y-3">
-                <p class="text-[12px]" style="color:var(--text-faint)">${escapeHtml(job.articleTitle || job.sourceUrl)}</p>
-                <label class="field"><span class="label">Video keyword</span>
-                    <input class="review-keyword" value="${escapeHtml(job.keyword || "")}" maxlength="120"></label>
-                <label class="field"><span class="label">Video type</span>
-                    <select class="review-content-type">
-                        <option value="ROUNDUP" ${job.contentType === "ROUNDUP" ? "selected" : ""}>Roundup</option>
-                        <option value="SINGLE" ${job.contentType === "SINGLE" ? "selected" : ""}>Single review</option>
-                    </select></label>
+                <div class="card card-pad space-y-3" style="background:var(--surface)">
+                    <div>
+                        <span class="label">Video keyword / title</span>
+                        <p class="hint mb-2">This becomes the video's on-screen title, folder name and SEO keyword.</p>
+                        <textarea class="review-keyword" rows="2" maxlength="120"
+                            style="width:100%;resize:vertical;font-weight:600"
+                            placeholder="e.g. Best Turtlenecks For Women">${escapeHtml(job.keyword || "")}</textarea>
+                        <div class="flex items-center justify-between mt-1">
+                            <span class="hint review-keyword-count"></span>
+                            <button type="button" class="btn btn-sm" data-action="save-keyword">Save Title</button>
+                        </div>
+                    </div>
+                    <label class="field"><span class="label">Video type</span>
+                        <select class="review-content-type">
+                            <option value="ROUNDUP" ${job.contentType === "ROUNDUP" ? "selected" : ""}>Roundup</option>
+                            <option value="SINGLE" ${job.contentType === "SINGLE" ? "selected" : ""}>Single review</option>
+                        </select></label>
+                </div>
+                <p class="text-[11px]" style="color:var(--text-faint)">Source: ${escapeHtml(job.articleTitle || job.sourceUrl)}</p>
             </div>
             <div class="lg:col-span-2 space-y-2">
                 <p class="section-label">Products in this video</p>
@@ -544,27 +561,78 @@
                     ${job.status === "READY" ? `<button type="button" class="btn btn-ok btn-sm" data-action="approve">${job.isApproved ? "Unapprove" : "Approve"}</button>` : ""}
                 </div>
             </div>`;
+
+        const keywordBox = wrap.querySelector(".review-keyword");
+        const keywordCount = wrap.querySelector(".review-keyword-count");
+        const syncKeywordCount = () => {
+            keywordCount.textContent = `${keywordBox.value.trim().length} / 120`;
+        };
+        keywordBox.addEventListener("input", syncKeywordCount);
+        syncKeywordCount();
+
         const rows = wrap.querySelector(".product-rows");
         (job.products || []).forEach((product, index) => {
             const row = document.createElement("div");
-            row.className = "grid gap-2 p-2 border rounded-lg items-start";
-            row.style.cssText = "border-color:var(--border);grid-template-columns:auto 52px minmax(0,1fr)";
+            row.className = "grid gap-3 p-2 border rounded-lg items-start";
+            row.style.cssText = "border-color:var(--border);grid-template-columns:auto 48px 56px minmax(0,1fr) auto";
             const dupNote = product.duplicateAcrossBatch ? ` · repeated in ${product.batchOccurrenceCount} sources` : "";
+            const link = product.affiliateUrl || `https://www.amazon.com/dp/${encodeURIComponent(product.asin || "")}`;
+            // A real thumbnail + clickable title is the whole point of this
+            // screen: judging "is this actually the product I want in the
+            // video?" from an ASIN and scraped anchor text alone is guesswork.
+            const thumb = product.imageUrl
+                ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener" title="Open on Amazon">
+                       <img src="${escapeHtml(product.imageUrl)}" alt="" loading="lazy"
+                            style="width:56px;height:56px;object-fit:contain;border-radius:6px;background:var(--surface-2)">
+                   </a>`
+                : `<div style="width:56px;height:56px;border-radius:6px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;color:var(--text-faint);font-size:10px">No image</div>`;
             row.innerHTML = `
-                <input type="checkbox" class="review-product mt-2" data-i="${index}" ${product.isIncluded !== false ? "checked" : ""} title="Include">
+                <input type="checkbox" class="review-product mt-2" data-i="${index}" ${product.isIncluded !== false ? "checked" : ""} title="Include in video">
                 <input type="number" class="review-product-rank text-[12px]" data-i="${index}" min="1" max="${job.products.length}" value="${index + 1}" title="Order">
-                <div class="grid gap-2" style="grid-template-columns:150px minmax(0,1fr)">
-                    <input type="text" class="review-product-asin text-[12px] uppercase mono" data-i="${index}" maxlength="10" value="${escapeHtml(product.asin || "")}" aria-label="ASIN for product ${index + 1}">
-                    <div class="min-w-0 py-1">
-                        <span class="block text-[12px]" style="color:var(--text)">${escapeHtml(product.name || product.asin || "")}</span>
-                        <span class="block text-[11px] ${product.duplicateAcrossBatch ? "" : ""}" style="color:${product.duplicateAcrossBatch ? "var(--warn-700)" : "var(--text-faint)"}">${escapeHtml(product.validationStatus || "UNVERIFIED")} · ${escapeHtml(product.availability || "UNKNOWN")}${escapeHtml(dupNote)}</span>
-                    </div>
-                </div>`;
+                ${thumb}
+                <div class="min-w-0 space-y-1">
+                    <a href="${escapeHtml(link)}" target="_blank" rel="noopener" class="block text-[12px] font-medium"
+                       style="color:var(--brand-600);text-decoration:none" title="Open this product on Amazon">
+                        ${escapeHtml(product.name || product.asin || "Unknown product")} ↗
+                    </a>
+                    <input type="text" class="review-product-asin text-[11px] uppercase mono" data-i="${index}" maxlength="10"
+                           value="${escapeHtml(product.asin || "")}" aria-label="ASIN for product ${index + 1}" style="max-width:140px">
+                    <span class="block text-[11px]" style="color:${product.duplicateAcrossBatch ? "var(--warn-700)" : "var(--text-faint)"}">
+                        ${product.price ? escapeHtml(product.price) + " · " : ""}${escapeHtml(product.validationStatus || "UNVERIFIED")} · ${escapeHtml(product.availability || "UNKNOWN")}${escapeHtml(dupNote)}
+                    </span>
+                </div>
+                <button type="button" class="btn btn-icon btn-ghost" data-remove-product="${index}" title="Remove this product" aria-label="Remove this product">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m-7 0v12a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V7"/></svg>
+                </button>`;
+            row.querySelector("[data-remove-product]").addEventListener("click", () =>
+                removeReviewProduct(job.jobId, index)
+            );
             rows.appendChild(row);
         });
         wrap.querySelector('[data-action="save"]').addEventListener("click", () => saveContentReview(job.jobId, false));
+        wrap.querySelector('[data-action="save-keyword"]').addEventListener("click", () => saveContentReview(job.jobId, false));
         wrap.querySelector('[data-action="approve"]')?.addEventListener("click", () => saveContentReview(job.jobId, !job.isApproved));
         return wrap;
+    }
+
+    async function removeReviewProduct(jobId, index) {
+        const job = currentContentBatch?.jobs?.find((j) => j.jobId === jobId);
+        if (!job) return;
+        // Rebuilt from the job's own product array rather than by pulling the
+        // row out of the DOM: every other field is read back by data-i index,
+        // so removing a node would silently shift those indexes off by one.
+        const products = (job.products || []).filter((_, i) => i !== index);
+        try {
+            const result = await api(`/api/content-jobs/${jobId}`, {
+                method: "PATCH",
+                body: { products, isApproved: false },
+            });
+            currentContentBatch.jobs = currentContentBatch.jobs.map((j) => (j.jobId === jobId ? result.data : j));
+            renderContentBatch(currentContentBatch);
+            document.getElementById(`content-review-${jobId}`)?.classList.remove("hidden");
+        } catch (err) {
+            showContentBatchError(err.message);
+        }
     }
 
     function toggleContentReview(jobId) {
@@ -572,7 +640,7 @@
     }
 
     async function saveContentReview(jobId, isApproved) {
-        const editor = document.querySelector(`[data-job-id="${jobId}"]`);
+        const editor = document.querySelector(`[data-review-editor="${jobId}"]`);
         const job = currentContentBatch.jobs.find((j) => j.jobId === jobId);
         if (!editor || !job) return;
         const products = job.products
@@ -595,6 +663,11 @@
             });
             currentContentBatch.jobs = currentContentBatch.jobs.map((j) => (j.jobId === jobId ? result.data : j));
             renderContentBatch(currentContentBatch);
+            // renderContentBatch rebuilds every detail row collapsed, which
+            // slammed the panel shut on each save -- keep the one being
+            // edited open so the saved result is actually visible.
+            document.getElementById(`content-review-${jobId}`)?.classList.remove("hidden");
+            toast(isApproved ? "Approved" : "Review saved", "ok", 2000);
         } catch (err) {
             showContentBatchError(err.message);
         }
@@ -1010,6 +1083,44 @@
             } else {
                 startGeneration();
             }
+        });
+
+        const syncCustomMusicVisibility = () => {
+            const field = $("#customMusicField");
+            if (field) field.style.display = $("#music_mode")?.value === "custom" ? "" : "none";
+        };
+        $("#music_mode")?.addEventListener("change", syncCustomMusicVisibility);
+        syncCustomMusicVisibility();
+
+        const savedMusic = $("#custom_music_path")?.value;
+        if (savedMusic && $("#customMusicStatus")) {
+            $("#customMusicStatus").textContent = `Using: ${savedMusic.split(/[\\/]/).pop()}`;
+        }
+
+        $("#uploadCustomMusicBtn")?.addEventListener("click", async (e) => {
+            const input = $("#customMusicFile");
+            const status = $("#customMusicStatus");
+            const file = input?.files?.[0];
+            if (!file) {
+                if (status) status.textContent = "Choose a file first.";
+                return;
+            }
+            await withBusy(e.currentTarget, "Uploading", async () => {
+                try {
+                    const form = new FormData();
+                    form.append("file", file);
+                    // api() passes FormData straight through, so the browser
+                    // sets its own multipart boundary.
+                    const result = await api("/api/custom-music", { method: "POST", body: form });
+                    $("#custom_music_path").value = result.data.path;
+                    if (status) status.textContent = `Using: ${result.data.name}`;
+                    autosave();
+                    toast("Custom music uploaded", "ok", 3000);
+                } catch (err) {
+                    if (status) status.textContent = "";
+                    toast(`Upload failed: ${err.message}`, "error", 6000);
+                }
+            });
         });
 
         $("#browseOutputRootBtn")?.addEventListener("click", async () => {

@@ -601,10 +601,14 @@ class CreatorsApiClient:
 
     def enrich_products(self, products: list[dict]) -> list[dict]:
         if not self.is_configured:
-            return [
-                {**product, "validationStatus": "MANUAL_REVIEW"}
-                for product in products
-            ]
+            # Most creators don't have Amazon Creators API access, and
+            # returning a bare MANUAL_REVIEW row gave the review screen
+            # nothing to review -- no real title, image, price or link, just
+            # the raw anchor text scraped off the article ("Top Picks"). Fall
+            # back to the same public product-page scrape the ASIN validation
+            # route already uses, so the review table is actually usable
+            # without API credentials.
+            return _scrape_enrich_products(products)
         verified: dict[str, dict] = {}
         asins = list(
             dict.fromkeys(
@@ -663,6 +667,41 @@ class CreatorsApiClient:
                 }
             )
         return enriched
+
+
+def _scrape_enrich_products(products: list[dict]) -> list[dict]:
+    """Fill in title/image/price/link by scraping each product's public
+    Amazon page, for installs with no Creators API credentials.
+
+    Imported lazily: asin_lookup pulls in its own HTTP stack and this module
+    is imported by the Flask app at startup, where that cost is pure
+    overhead for anyone who never opens URL-to-Video. A scrape failure
+    degrades to the previous MANUAL_REVIEW behaviour rather than failing the
+    whole analysis -- an unreviewable row still beats a dead batch.
+    """
+    try:
+        try:
+            from . import asin_lookup
+        except ImportError:
+            import asin_lookup
+        scraped = asin_lookup.lookup_asins(
+            [str(p.get("asin", "")) for p in products if p.get("asin")]
+        )
+    except Exception:
+        scraped = {}
+
+    enriched = []
+    for product in products:
+        found = scraped.get(str(product.get("asin", "")).upper()) or {}
+        merged = {**product}
+        # Only overwrite with values the scrape actually resolved, so a
+        # partial scrape never blanks out data the extractor already had.
+        for key in ("name", "imageUrl", "price", "affiliateUrl", "availability"):
+            if found.get(key):
+                merged[key] = found[key]
+        merged["validationStatus"] = found.get("validationStatus") or "MANUAL_REVIEW"
+        enriched.append(merged)
+    return enriched
 
 
 class BatchStore:

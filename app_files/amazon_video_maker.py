@@ -105,6 +105,12 @@ LLM_TIMEOUT_SECONDS = 120
 BEAT_BREATH_SECONDS = 0.28
 # How long a "Number 3" countdown card stays on screen.
 RANK_SLIDE_SECONDS = 3.0
+# Background-music bed level. Narration is loudness-normalized to -14 LUFS
+# in the concat stage, so a bed averaging about -32 dBFS sits well under it
+# -- audible in the gaps, never competing with speech.
+MUSIC_BED_TARGET_DBFS = -32.0
+# Used only when a track's level can't be measured at all.
+MUSIC_BED_FALLBACK_GAIN_DB = -24.0
 # On-screen captions. Off by default: burning them in costs a full extra
 # encode pass, and the .srt sidecar is always written regardless.
 # Two alternating narrators. Off by default: one voice is the normal
@@ -113,9 +119,13 @@ RANK_SLIDE_SECONDS = 3.0
 DUAL_VOICE_ENABLED = False
 DUAL_VOICE_SECOND = ""
 CAPTIONS_ENABLED = False
-CAPTIONS_FONT_SIZE = 40
+# Deliberately small: this is multiplied by TEXT_SCALE (1.5) at render
+# time, so 26 lands around 39px on the 1080-tall canvas -- roughly the
+# proportion YouTube's own captions use. It was 40 (=60px), which with
+# unwrapped sentence-long cues covered most of the frame.
+CAPTIONS_FONT_SIZE = 26
 CAPTIONS_POSITION = "bottom"
-COLOR_CAPTIONS_TEXT = "#FFFFFF"
+COLOR_CAPTIONS_TEXT = "#FFE95C"
 COLOR_CAPTIONS_OUTLINE = "#000000"
 COLOR_CAPTIONS_BG = "#000000"
 VAL_CAPTIONS_BG_OPACITY = 0.55
@@ -209,7 +219,9 @@ VAL_INTRO_BG_OPACITY = 0.5
 ENABLE_INTRO_BG = True
 
 COLOR_OUTRO_TITLE = "#FFFFFF"
-COLOR_OUTRO_BG = "#000000"
+# Orange reads as the call-to-action colour the rest of the UI uses,
+# and the closing card IS the call to action.
+COLOR_OUTRO_BG = "#F97316"
 VAL_OUTRO_BG_OPACITY = 0.5
 ENABLE_OUTRO_BG = True
 
@@ -675,6 +687,36 @@ def apply_video_speed(input_path, duration, base_dir, speed=None):
     return output_path, new_duration
 
 
+def product_caption_points(product, narration_text="", max_points=5, max_chars=70):
+    """On-screen caption text for a product segment: its key feature points.
+
+    Burning the whole narration in duplicated everything the viewer was
+    already hearing and filled the frame with text. Short spec points are
+    what captions are actually good for -- they carry the numbers and
+    features a viewer wants to read and screenshot, and they don't compete
+    with the voice track.
+
+    Falls back to the narration when a product has no usable feature
+    bullets (a scrape-only product often won't), since some caption is
+    better than a silent gap in the caption file.
+    """
+    points = []
+    for raw in (product or {}).get("features") or []:
+        point = re.sub(r"\s+", " ", str(raw or "")).strip(" .;:-•")
+        if not point:
+            continue
+        # Marketing bullets run long; keep the front of the line, which is
+        # where the actual spec almost always is.
+        if len(point) > max_chars:
+            point = point[:max_chars].rsplit(" ", 1)[0].strip() + "..."
+        if not point.endswith((".", "!", "?", "...")):
+            point += "."
+        points.append(point)
+        if len(points) >= max_points:
+            break
+    return " ".join(points) if points else narration_text
+
+
 def _ass_color(hex_color, opacity=1.0):
     """#RRGGBB -> libass &HAABBGGRR.
 
@@ -795,14 +837,61 @@ def write_captions_srt(base_dir, timeline_segments, speed):
         return None
 
 
-def build_music_mix_filter(duration):
-    """Build a deterministic voice-first mix on one continuous 48 kHz clock."""
+def measure_mean_dbfs(path):
+    """Average level of an audio file in dBFS, or None if it can't be read.
+
+    Used to place any music bed at a known level with a STATIC gain. A
+    dynamic normalizer would do this too, but a previous fix established
+    that dynamic loudness processing in this mix pumps audibly -- measuring
+    once up front and applying a fixed gain gets the same level with no
+    time-varying processing at all.
+    """
+    try:
+        result = subprocess.run(
+            [FFMPEG_BIN, "-hide_banner", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60, **quiet_subprocess_kwargs(),
+        )
+    except (subprocess.SubprocessError, OSError) as exc:
+        print(f"[MUSIC][WARN] Could not measure track level: {exc}")
+        return None
+    match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?)\s*dB", result.stderr or "")
+    return float(match.group(1)) if match else None
+
+
+def music_bed_gain_db(path, target_dbfs=None):
+    """How much to attenuate/boost `path` so it sits at the bed target.
+
+    The old mix applied a blind `volume=0.06` (-24 dB) to every track. That
+    assumed all sources arrive at similar levels, which was wrong in both
+    directions: the bundled beds average about -41 dBFS, so -24 dB on top
+    put them near -65 dB -- mixed in but far below audibility, which is why
+    background music seemed not to work at all. A commercially mastered
+    custom upload would have had the opposite problem and buried the voice.
+    """
+    target = MUSIC_BED_TARGET_DBFS if target_dbfs is None else target_dbfs
+    measured = measure_mean_dbfs(path)
+    if measured is None:
+        # Unmeasurable: fall back to a conservative fixed attenuation rather
+        # than risking a full-volume track over the narration.
+        return -24.0
+    # Clamped so a pathological measurement (near-silent or clipped source)
+    # can't produce an absurd boost or a total mute.
+    return max(-40.0, min(12.0, target - measured))
+
+
+def build_music_mix_filter(duration, music_gain_db=None):
+    """Build a deterministic voice-first mix on one continuous 48 kHz clock.
+
+    `music_gain_db` is the per-track static gain from music_bed_gain_db();
+    the sidechain below still ducks the bed whenever narration is present.
+    """
     duration_text = str(float(duration))
+    gain = MUSIC_BED_FALLBACK_GAIN_DB if music_gain_db is None else float(music_gain_db)
     return (
         f"[0:a]aresample={AUDIO_SAMPLE_RATE}:async=1:first_pts=0,"
         f"apad=whole_dur={duration_text},atrim=duration={duration_text}[voice];"
         f"[1:a]aresample={AUDIO_SAMPLE_RATE}:async=1:first_pts=0,"
-        "volume=0.06[bgm];"
+        f"volume={gain:.2f}dB[bgm];"
         "[bgm][voice]sidechaincompress=threshold=0.015:ratio=10:"
         "attack=15:release=450[ducked];"
         "[voice][ducked]amix=inputs=2:duration=first:"
@@ -2021,9 +2110,21 @@ def download_assets(asin, base_dir="files_created"):
         try:
             if not is_allowed_asset_url(v_url):
                 continue
-            head = requests.head(v_url, timeout=5, allow_redirects=True)
-            if head.status_code == 200:
-                if int(head.headers.get("content-length", 0) or 0) > 200 * 1024 * 1024:
+            # The HEAD is only a cheap pre-filter for oversized files -- the
+            # streaming loop below enforces the same 200 MB cap regardless.
+            # A 5s timeout against Amazon's transcoding CDN routinely expired
+            # on perfectly good videos and threw the candidate away, so a
+            # slow or unsupported HEAD now falls through to the real download
+            # instead of skipping the product's only footage.
+            try:
+                head = requests.head(v_url, timeout=(5, 15), allow_redirects=True)
+                head_status = head.status_code
+                head_length = int(head.headers.get("content-length", 0) or 0)
+            except requests.RequestException as head_error:
+                print(f"[INFO] HEAD check failed for {v_title} ({head_error}); trying the download anyway.")
+                head_status, head_length = 200, 0
+            if head_status == 200:
+                if head_length > 200 * 1024 * 1024:
                     continue
                 print(f"Downloading Video: {v_title}...")
                 filepath = os.path.join(base_dir, f"{asin}_{v_title}.mp4")
@@ -2032,7 +2133,7 @@ def download_assets(asin, base_dir="files_created"):
                 # path, including the size-cap raise below -- previously the
                 # response was never closed and, on the raise, the partially
                 # written file was left on disk for a later glob to trip over.
-                with requests.get(v_url, stream=True, timeout=30) as r:
+                with requests.get(v_url, stream=True, timeout=(10, 60)) as r:
                     r.raise_for_status()
                     with open(filepath, 'wb') as f:
                         for chunk in r.iter_content(chunk_size=1024*1024):
@@ -2965,6 +3066,43 @@ def _tts_provider_has_credentials(provider):
     return False
 
 
+# Once a fallback provider has actually produced audio for this video, it is
+# pinned as the voice for the REST of that video. Narration is synthesized as
+# many separate beats (plus intro/outro/rank clips), each falling back
+# independently -- so an intermittent primary failure (a rate limit, one
+# dropped connection) used to voice some beats in the primary voice and
+# others in a fallback voice, and the finished video audibly switched
+# between two or three different narrators partway through. One consistent
+# voice matters more than using the "best" provider for a few segments.
+_PINNED_TTS_PROVIDER = None
+_PINNED_TTS_LOCK = threading.Lock()
+
+
+def reset_tts_provider_pin():
+    """Called once per keyword, so a transient failure while rendering one
+    video doesn't permanently downgrade every later video in the batch."""
+    global _PINNED_TTS_PROVIDER
+    with _PINNED_TTS_LOCK:
+        _PINNED_TTS_PROVIDER = None
+
+
+def _pin_tts_provider(provider):
+    global _PINNED_TTS_PROVIDER
+    with _PINNED_TTS_LOCK:
+        if _PINNED_TTS_PROVIDER == provider:
+            return
+        _PINNED_TTS_PROVIDER = provider
+    print(
+        f"[VOICE] Pinning '{provider}' for the rest of this video so every "
+        f"segment keeps the same narrator."
+    )
+
+
+def _pinned_tts_provider():
+    with _PINNED_TTS_LOCK:
+        return _PINNED_TTS_PROVIDER
+
+
 def _build_tts_chain():
     """Primary provider (TTS_SERVICE) first, then:
     1. If opted in via TTS_FALLBACK_ENABLED, the user's own drag-ordered
@@ -3055,9 +3193,20 @@ async def _tts_provider_once(text, output_path, voice=None, unusable=None):
         # gets a real error rather than "no provider available".
         filtered = [p for p in chain if p not in unusable]
         chain = filtered or chain
+    pinned = _pinned_tts_provider()
+    if pinned and pinned in chain:
+        # An earlier segment of this same video already fell back to this
+        # provider -- lead with it so the whole video keeps one narrator
+        # instead of alternating whenever the primary recovers.
+        chain = [pinned] + [p for p in chain if p != pinned]
     last_err = None
     for i, provider in enumerate(chain):
-        is_primary = provider == chain[0]
+        # "Primary" means the provider the user actually configured, NOT
+        # merely first in the chain: the per-call `voice` override is a
+        # voice id from THAT provider's catalogue and is meaningless to any
+        # other provider, so pinning a fallback to the front must not start
+        # handing it a foreign voice id.
+        is_primary = provider == TTS_SERVICE
         try:
             if provider == "kokoro":
                 v_id = (voice if is_primary else None) or KOKORO_VOICE
@@ -3075,6 +3224,8 @@ async def _tts_provider_once(text, output_path, voice=None, unusable=None):
                 await asyncio.get_running_loop().run_in_executor(
                     None, lambda c=config: tts_engine.synthesize(text, output_path, c, ffmpeg_bin=FFMPEG_BIN)
                 )
+            if provider != TTS_SERVICE:
+                _pin_tts_provider(provider)
             return
         except Exception as e:
             last_err = e
@@ -3466,6 +3617,9 @@ async def main_pipeline():
         if not keyword:
             print(f"[FATAL] Invalid or empty keyword in line: {line!r}")
             continue
+        # Each video gets a fresh shot at the configured provider; the pin
+        # only guarantees consistency WITHIN one video.
+        reset_tts_provider_pin()
         raw_asins = [a.upper() for a in parts[1:] if re.fullmatch(r"[A-Za-z0-9]{10}", a)]
         # A repeated ASIN (typo, duplicate paste, or the same product
         # appearing twice on an Amazon results page) was never deduplicated
@@ -3884,10 +4038,11 @@ async def main_pipeline():
                 # Re-integrate from p['audio_segments']
                 valid_audios = [seg[0] for seg in p['audio_segments'] if seg[0] and os.path.exists(seg[0])]
                 p_dur = sum(get_audio_duration(a) for a in valid_audios) or 5.0
-                caption_text = " ".join(
+                narration_text = " ".join(
                     seg[1] for seg in p['audio_segments']
                     if seg[0] in valid_audios and not (len(seg) > 2 and seg[2])
                 )
+                caption_text = product_caption_points(p, narration_text)
                 timeline_segments.append({'type': 'product', 'start': current_time_total, 'dur': p_dur, 'rank': rank, 'product': p, 'audios': valid_audios, 'caption_text': caption_text, 'show_cta': p_index in cta_product_indices})
                 current_time_total += p_dur
             
@@ -4164,12 +4319,31 @@ async def main_pipeline():
         # --- Background Music Check ---
         selected_music = None
         music_path = None
-        if run_settings.get("music_mode", "auto") == "auto":
+        music_mode = run_settings.get("music_mode", "nature")
+        if music_mode == "custom":
+            # A user-supplied file wins outright -- no library routing, no
+            # mood inference. It still goes through the same loudness
+            # normalization as a bundled bed, so a commercially mastered
+            # track doesn't bury the narration.
+            custom_music = str(run_settings.get("custom_music_path") or "").strip()
+            if custom_music and os.path.isfile(custom_music):
+                music_path = custom_music
+                print(f"[MUSIC] Using custom track: {os.path.basename(custom_music)}")
+            else:
+                print(
+                    "[MUSIC][WARN] Music mode is 'custom' but no readable file is set "
+                    f"({custom_music or 'nothing selected'}) -- rendering without music."
+                )
+        elif music_mode in ("auto", "nature"):
             try:
                 selected_music = music_manager.select_track(
                     human_kw,
                     os.path.join(os.path.dirname(__file__), "music", "music_library.json"),
                     recent_track_ids=recent_music_ids,
+                    # "nature" restricts routing to the non-musical ambience
+                    # beds -- no melody or performance for Content ID to
+                    # match, which is the safest bed for a monetized channel.
+                    required_mood="nature" if music_mode == "nature" else None,
                 )
                 music_path = selected_music["path"]
                 recent_music_ids.append(selected_music["id"])
@@ -4183,7 +4357,9 @@ async def main_pipeline():
             # Narration was already loudness-normalized in the concat stage.
             # A second dynamic loudnorm pass after mixing caused audible volume
             # pumping; a limiter preserves clarity without re-shaping speech.
-            filter_complex_audio = build_music_mix_filter(expected_final_duration)
+            music_gain_db = music_bed_gain_db(music_path)
+            print(f"[MUSIC] Bed gain {music_gain_db:+.1f} dB (target {MUSIC_BED_TARGET_DBFS:.0f} dBFS)")
+            filter_complex_audio = build_music_mix_filter(expected_final_duration, music_gain_db)
             
             cmd = [
                 "ffmpeg", "-y", 

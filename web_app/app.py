@@ -1110,6 +1110,64 @@ def prepare_content_batch(batch_id):
     return jsonify({"data": {"batchId": batch_id, "videoCount": len(lines)}})
 
 
+CUSTOM_MUSIC_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
+MAX_CUSTOM_MUSIC_BYTES = 50 * 1024 * 1024
+
+
+@app.route("/api/custom-music", methods=["POST"])
+def upload_custom_music():
+    """Stores a user-supplied background-music file inside the app's own data
+    directory and returns its path for the custom_music_path setting.
+
+    An upload (rather than a filesystem path field) is what actually works
+    here: this UI runs in a browser, which never exposes a real path for a
+    picked file, and the existing folder browser only selects directories.
+    """
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return _api_error("VALIDATION_ERROR", "Choose an audio file to upload", 422)
+
+    extension = os.path.splitext(upload.filename)[1].lower()
+    if extension not in CUSTOM_MUSIC_EXTENSIONS:
+        return _api_error(
+            "VALIDATION_ERROR",
+            f"Unsupported audio type '{extension or 'unknown'}'. Use one of: "
+            + ", ".join(sorted(CUSTOM_MUSIC_EXTENSIONS)),
+            422,
+        )
+
+    music_dir = DATA_DIR / "custom_music"
+    music_dir.mkdir(parents=True, exist_ok=True)
+    # The uploaded name is untrusted: derive a safe one rather than trusting
+    # it, so a crafted filename can't escape this directory.
+    safe_stem = slugify(os.path.splitext(upload.filename)[0], fallback="custom-music")
+    destination = music_dir / f"{safe_stem}{extension}"
+
+    written = 0
+    try:
+        with open(destination, "wb") as handle:
+            while True:
+                chunk = upload.stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_CUSTOM_MUSIC_BYTES:
+                    raise ValueError("Music file is larger than 50 MB")
+                handle.write(chunk)
+    except ValueError as exc:
+        if destination.exists():
+            destination.unlink()
+        return _api_error("VALIDATION_ERROR", str(exc), 413)
+    except OSError as exc:
+        return _api_error("SERVER_ERROR", f"Could not save the file: {exc}", 500)
+
+    if written == 0:
+        destination.unlink(missing_ok=True)
+        return _api_error("VALIDATION_ERROR", "That file is empty", 422)
+
+    return jsonify({"data": {"path": str(destination), "name": destination.name, "bytes": written}})
+
+
 @app.route("/api/content-batches/history")
 def content_batches_history():
     """Past URL-to-Video jobs that were actually sent to the render

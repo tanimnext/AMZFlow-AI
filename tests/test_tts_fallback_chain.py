@@ -92,6 +92,76 @@ class TtsFallbackChainTests(unittest.TestCase):
         self.assertNotIn("not-a-real-provider", chain)
 
 
+class StickyFallbackVoiceTests(unittest.TestCase):
+    """Narration is synthesized as many separate beats, each falling back
+    independently. An intermittent primary failure therefore voiced SOME
+    beats with the primary and others with a fallback -- the finished video
+    audibly switched narrator partway through. Once a fallback actually
+    produces audio it is pinned for the rest of that video."""
+
+    def setUp(self):
+        patches = {
+            "TTS_SERVICE": "elevenlabs",
+            "ELEVENLABS_API_KEY": "el-key",
+            "CARTESIA_API_KEY": "cart-key",
+            "AI33PRO_API_KEY": "",
+            "DEEPGRAM_API_KEY": "",
+            "GEMINI_API_KEYS": [],
+            "VERTEX_PROJECT_ID": "",
+            "VERTEX_SERVICE_ACCOUNT_JSON": "",
+            "TTS_FALLBACK_ENABLED": False,
+            "TTS_CHAIN_RAW": "",
+        }
+        self._patchers = [patch.object(avm, name, value) for name, value in patches.items()]
+        for p in self._patchers:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in self._patchers])
+        avm.reset_tts_provider_pin()
+        self.addCleanup(avm.reset_tts_provider_pin)
+
+    def _synthesize(self, fail_primary):
+        """Runs one beat; returns which provider actually produced audio."""
+        used = []
+
+        def fake_synthesize(text, output_path, config, **kwargs):
+            used.append(config["service"])
+            if config["service"] == "elevenlabs" and fail_primary():
+                raise RuntimeError("HTTP 429: rate limited")
+            return {"provider": config["service"]}
+
+        with patch.object(avm.tts_engine, "synthesize", side_effect=fake_synthesize):
+            asyncio.run(avm._tts_provider_once("hello", "/tmp/out.mp3"))
+        return used[-1]
+
+    def test_a_recovered_primary_does_not_switch_the_voice_back_mid_video(self):
+        # Beat 1: primary rate-limited -> falls back to cartesia.
+        self.assertEqual(self._synthesize(lambda: True), "cartesia")
+        # Beat 2: primary is healthy again. Before the pin this silently
+        # returned to elevenlabs, so beat 1 and beat 2 had different voices.
+        self.assertEqual(self._synthesize(lambda: False), "cartesia")
+        self.assertEqual(self._synthesize(lambda: False), "cartesia")
+
+    def test_a_healthy_primary_is_never_pinned_away_from(self):
+        self.assertEqual(self._synthesize(lambda: False), "elevenlabs")
+        self.assertIsNone(avm._pinned_tts_provider())
+
+    def test_the_pin_resets_between_videos(self):
+        self._synthesize(lambda: True)
+        self.assertEqual(avm._pinned_tts_provider(), "cartesia")
+        # A transient failure in one video must not permanently downgrade
+        # every later video in the same batch.
+        avm.reset_tts_provider_pin()
+        self.assertIsNone(avm._pinned_tts_provider())
+        self.assertEqual(self._synthesize(lambda: False), "elevenlabs")
+
+    def test_pinned_provider_is_moved_to_the_front_of_the_chain(self):
+        avm._pin_tts_provider("cartesia")
+        chain = avm._build_tts_chain()
+        pinned = avm._pinned_tts_provider()
+        reordered = [pinned] + [p for p in chain if p != pinned]
+        self.assertEqual(reordered[0], "cartesia")
+
+
 class PermanentTtsErrorTests(unittest.TestCase):
     """_tts_with_retry makes four attempts and each one walks the whole
     chain. A missing/rejected credential fails identically every time, so

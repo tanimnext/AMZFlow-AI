@@ -78,9 +78,20 @@
                 <span class="hint">Applies to the whole rendered video (picture and narration together).</span></label>
             <label class="field"><span class="label">Background music</span>
                 <select id="music_mode">
+                    <option value="nature">Natural ambience (safest for monetization)</option>
                     <option value="auto">Auto-route licensed track</option>
+                    <option value="custom">My own music file</option>
                     <option value="off">No background music</option>
-                </select></label>
+                </select>
+                <span class="hint">Natural ambience is non-musical (rain, wind, stream, room tone), generated locally &mdash; no melody or recording for Content ID to match.</span></label>
+            <div class="field" id="customMusicField" style="display:none"><span class="label">Custom music file</span>
+                <div class="flex gap-2 items-center">
+                    <input id="customMusicFile" type="file" accept="audio/*" data-setting="false" class="flex-1 text-[12px]">
+                    <button type="button" id="uploadCustomMusicBtn" class="btn btn-sm" data-setting="false">Upload</button>
+                </div>
+                <input id="custom_music_path" type="hidden">
+                <span class="hint" id="customMusicStatus"></span>
+                <span class="hint">It is loudness-matched to the same bed level as the built-in tracks, so a loud track won't bury the narration. You are responsible for holding the rights to whatever you upload.</span></div>
             <div class="switch-row">
                 <span class="switch-text">Use generic intro clip</span>
                 <label class="switch"><input id="enable_intro_clip" type="checkbox"><span class="slider"></span></label>
