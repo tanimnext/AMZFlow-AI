@@ -1253,6 +1253,7 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
         audio_map_args = ["-map", f"{bg_input_count}:a"]
 
     # Draw text
+    typing_windows = []
     if is_rank:
         # Using a very large filled circle character and forcing it to be solid
         circle_size = round(750 * TEXT_SCALE)
@@ -1341,33 +1342,81 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
         line_step = f_size + line_gap
         total_block_h = n_lines * f_size + (n_lines - 1) * line_gap
         line_filters = []
-        for i, line in enumerate(wrapped_lines):
-            y_expr = f"((h-{total_block_h})/2)+{i * line_step}"
-            line_filters.append(
-                f"drawtext={base_style}:text='{line}':x=((w-text_w)/2):y='{y_expr}'"
-            )
-        drawtext = ",".join(line_filters)
+        # Sequential typed reveal, one line at a time -- same mechanic as the
+        # product caption bar (_typewriter_reveal_steps: cumulative prefixes,
+        # each one visible in its own mutually-exclusive time window). A
+        # longer AI-generated conclusion used to draw every wrapped line
+        # always-on for the whole slide, which is both a wall of text to
+        # read in the time given and, per user report, could visually smear
+        # into a stacked/overlapping mess. One line revealing (then holding)
+        # while the rest stay off keeps exactly one thing on screen at once.
+        if n_lines:
+            lead_in = 0.4
+            tail_hold = max(0.6, duration * 0.08)
+            available = max(0.5, duration - lead_in - tail_hold)
+            per_line = available / n_lines
+            for i, line in enumerate(wrapped_lines):
+                y_expr = f"((h-{total_block_h})/2)+{i * line_step}"
+                line_start = lead_in + i * per_line
+                line_end = duration if i == n_lines - 1 else line_start + per_line
+                steps = _typewriter_reveal_steps(line)
+                if not steps:
+                    continue
+                type_span = min(per_line * 0.6, max(0.3, len(line) * 0.035))
+                typing_windows.append((line_start, line_start + type_span))
+                step_dt = type_span / len(steps)
+                for step_index, prefix in enumerate(steps):
+                    step_start = line_start + step_index * step_dt
+                    is_last = step_index == len(steps) - 1
+                    step_end = line_end if is_last else step_start + step_dt
+                    line_filters.append(
+                        f"drawtext={base_style}:text='{prefix}':x=((w-text_w)/2):y='{y_expr}':"
+                        f"enable='between(t,{step_start:.3f},{step_end:.3f})'"
+                    )
+        drawtext = ",".join(line_filters) if line_filters else "null"
 
     if not draw_text and not is_rank:
         # The background image (e.g. the styled Thumbnail.jpg reused for the
         # intro) already carries its own baked-in title text -- drawing the
         # slide's title again on top of it would double up the text.
         drawtext = "null"
+        typing_windows = []
 
     filter_complex = f"{filter_chain},{drawtext}"
     if branding_filters:
         filter_complex += "," + ",".join(branding_filters)
     filter_complex += "[v]"
-    
-    cmd = ["ffmpeg", "-y"] + inputs + [
-        "-filter_complex", filter_complex,
-        "-map", "[v]"] + audio_map_args + [
+
+    # Keystroke ticks under the typed reveal above -- same asset/mechanism
+    # as the product segment caption bar (keytype_loop.wav, gated to the
+    # typing windows only, muted the rest of the time).
+    typing_loop = os.path.join(os.path.dirname(__file__), "sfx", "keytype_loop.wav")
+    audio_af = (
+        f"aresample={AUDIO_SAMPLE_RATE}:async=1:first_pts=0,"
+        f"apad=whole_dur={duration},atrim=duration={duration}"
+    )
+    if typing_windows and os.path.isfile(typing_loop):
+        typing_idx = sum(1 for a in inputs if a == "-i")
+        inputs = inputs + ["-stream_loop", "-1", "-i", typing_loop]
+        inside = "+".join(f"between(t,{s:.3f},{e:.3f})" for s, e in typing_windows)
+        filter_complex += (
+            f"; [{bg_input_count}:a]{audio_af}[voice_a]"
+            f"; [{typing_idx}:a]aresample={AUDIO_SAMPLE_RATE},"
+            f"volume=0:enable='eq(0,{inside})',volume={TYPING_SFX_GAIN},"
+            f"apad=whole_dur={duration},atrim=duration={duration}[key_a]"
+            f"; [voice_a][key_a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"
+        )
+        cmd = ["ffmpeg", "-y"] + inputs + [
+            "-filter_complex", filter_complex,
+            "-map", "[v]", "-map", "[aout]",
+        ]
+    else:
+        cmd = ["ffmpeg", "-y"] + inputs + [
+            "-filter_complex", filter_complex,
+            "-map", "[v]"] + audio_map_args + ["-af", audio_af]
+
+    cmd += [
         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
-        "-af",
-        (
-            f"aresample={AUDIO_SAMPLE_RATE}:async=1:first_pts=0,"
-            f"apad=whole_dur={duration},atrim=duration={duration}"
-        ),
         "-c:a", "aac", "-ar", str(AUDIO_SAMPLE_RATE), "-ac", "2",
         "-r", "25",
         "-t", str(duration),
@@ -2021,7 +2070,30 @@ _CSS_CODE_PATTERN = re.compile(
 )
 
 
-def _looks_like_code_or_css(text):
+# Amazon site-chrome/accessibility boilerplate that reads as valid prose
+# (passes both the CSS/code check and the letter-ratio check below) but is
+# never a product feature -- e.g. "Select the department you want to search
+# in" and "To move between items, use your keyboard up or down arrow keys"
+# both showed up burned into a caption because the section-anchor search
+# (see download_assets) landed near header/search nav markup instead of the
+# real feature bullets. Lowercase, partial-match substrings so wording drift
+# ("arrow keys" vs "up or down arrows") is still caught.
+_AMAZON_BOILERPLATE_SNIPPETS = (
+    "use your keyboard",
+    "select the department you want to search",
+    "compare with similar items",
+    "to move between items",
+    "skip to main",
+    "skip to main search results",
+    "hello, sign in",
+    "returns & orders",
+    "search amazon",
+    "choose a language for shopping",
+    "go back to filtering menu",
+)
+
+
+def _looks_like_junk_feature_text(text):
     """Reject scraped "feature" text that is actually CSS/JS/JSON, not a sentence.
 
     The aggressive feature scraper grabs any text sitting between '>' and '<'
@@ -2037,6 +2109,9 @@ def _looks_like_code_or_css(text):
     # skew heavy on punctuation/symbols relative to letters.
     letters = sum(1 for c in text if c.isalpha())
     if letters < len(text) * 0.55:
+        return True
+    lowered = text.lower()
+    if any(snippet in lowered for snippet in _AMAZON_BOILERPLATE_SNIPPETS):
         return True
     return False
 
@@ -2103,8 +2178,15 @@ def download_assets(asin, base_dir="files_created"):
     about_mark = "About this item"
     pos = content.find(about_mark)
     if pos == -1:
-        # Fallback search for common variations
-        m = re.search(r'(About this item|About|Features|Technical Details)', content, re.IGNORECASE)
+        # Fallback to other precise, multi-word section headers only. Bare
+        # single words like "About" or "Features" used to be accepted here
+        # and could match header/nav markup near the top of the page (e.g.
+        # an "About Amazon" link) long before the real feature section --
+        # the 30k-char window from that wrong position then swept up site
+        # chrome like "Select the department you want to search in" and
+        # "use your keyboard up or down arrow keys", which got scraped as
+        # if they were product features.
+        m = re.search(r'(About this item|Product information|Technical Details)', content, re.IGNORECASE)
         if m: pos = m.start()
     
     if pos != -1:
@@ -2129,7 +2211,7 @@ def download_assets(asin, base_dir="files_created"):
                 not p_clean.startswith(('{', 'if(', '.', 'function', 'var', 'window')) and
                 "Check to see" not in p_clean and
                 "About this item" not in p_clean and
-                not _looks_like_code_or_css(p_clean) and
+                not _looks_like_junk_feature_text(p_clean) and
                 p_clean not in features):
 
                 # Check if it has at least 3 words to be a valid feature sentence
@@ -2145,7 +2227,7 @@ def download_assets(asin, base_dir="files_created"):
         for fm in fallback_matches:
             fm_clean = re.sub(r'<[^>]+>', '', fm).strip()
             if (len(fm_clean) > 15 and fm_clean not in features and "About" not in fm_clean
-                    and not _looks_like_code_or_css(fm_clean)):
+                    and not _looks_like_junk_feature_text(fm_clean)):
                 features.append(html.unescape(fm_clean))
 
     print(f"Features found: {len(features)}")
