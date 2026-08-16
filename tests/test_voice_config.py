@@ -53,7 +53,7 @@ class GeminiVoiceConfigTests(unittest.TestCase):
             },
         )
 
-        self.assertIn("trusted product-review expert", prompt)
+        self.assertIn("natural, confident and conversational product reviewer", prompt)
         self.assertIn('say "LiDAR" as "lie-dar"', prompt)
         self.assertIn("Pause briefly before the verdict", prompt)
         self.assertTrue(prompt.endswith("The LiDAR sensor maps the room."))

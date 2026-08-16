@@ -52,10 +52,20 @@ GEMINI_TTS_VOICES = {
     name: f"{style} ({gender})" for name, (style, gender) in GEMINI_TTS_VOICE_INFO.items()
 }
 
+# TRUSTED_EXPERT and ENERGETIC_ROUNDUP are the two paired-with-a-voice
+# presets ("Ad Voiceover" -> Orus for single-product reviews, "Energetic
+# Co-Host" -> Puck/Zephyr for best-of/list videos -- see
+# amazon_video_maker.recommended_gemini_voice()). Wording matters here more
+# than the other three: the earlier TRUSTED_EXPERT text still let the model
+# read single-product reviews like a TV commercial voiceover, which is the
+# one thing this style exists to avoid.
 VOICE_STYLES = {
     "TRUSTED_EXPERT": (
-        "A trusted product-review expert: knowledgeable, conversational, "
-        "measured, and candid about trade-offs."
+        "Natural, confident and conversational product reviewer. Sound "
+        "knowledgeable and trustworthy, not like a commercial announcer. Use "
+        "a smooth medium pace, natural pauses and subtle emphasis. Present "
+        "both strengths and limitations fairly. Avoid exaggerated "
+        "excitement, hard-selling and overly promotional delivery."
     ),
     "FRIENDLY_BUYER_GUIDE": (
         "A friendly buyer guide speaking naturally to one listener, with clear "
@@ -66,12 +76,37 @@ VOICE_STYLES = {
         "confident."
     ),
     "ENERGETIC_ROUNDUP": (
-        "An energetic roundup host: lively and engaging without shouting or "
-        "rushing product names."
+        "Energetic and engaging product review host with a natural "
+        "conversational style. Keep the pace lively but controlled. Use "
+        "enthusiasm to maintain attention without sounding exaggerated, "
+        "childish or salesy. Add natural pauses and emphasize important "
+        "product differences, benefits and drawbacks."
     ),
     "DOCUMENTARY": (
         "An informative documentary narrator: clear, composed, and precise."
     ),
+}
+
+# Display labels for the settings UI -- distinct from the dict keys above
+# (which stay stable for backward compatibility with already-saved settings
+# files) and from the literal prompt text (which is written as an
+# instruction to the model, not as a menu label).
+VOICE_STYLE_LABELS = {
+    "TRUSTED_EXPERT": "Ad Voiceover (single-product review)",
+    "FRIENDLY_BUYER_GUIDE": "Friendly Buyer Guide",
+    "PREMIUM_REVIEW": "Premium Review",
+    "ENERGETIC_ROUNDUP": "Energetic Co-Host (best-of / list)",
+    "DOCUMENTARY": "Documentary",
+}
+
+# Recommended Gemini/Vertex TTS voice for each of the two content-type-paired
+# styles above. Orus is firm/male -- reads as a grounded, credible single
+# reviewer rather than an announcer. Puck/Zephyr are upbeat/bright -- suit a
+# faster-paced, energetic list format; picking between the two per render
+# keeps a channel's list videos from all sounding identical.
+RECOMMENDED_VOICES = {
+    "TRUSTED_EXPERT": ("Orus",),
+    "ENERGETIC_ROUNDUP": ("Puck", "Zephyr"),
 }
 
 ACCENTS = {

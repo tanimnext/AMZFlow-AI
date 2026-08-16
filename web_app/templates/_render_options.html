@@ -80,10 +80,11 @@
                 <select id="music_mode">
                     <option value="nature">Natural ambience (safest for monetization)</option>
                     <option value="auto">Auto-route licensed track</option>
+                    <option value="ai_generated">AI generated (Vertex AI Lyria)</option>
                     <option value="custom">My own music file</option>
                     <option value="off">No background music</option>
                 </select>
-                <span class="hint">Natural ambience is non-musical (rain, wind, stream, room tone), generated locally &mdash; no melody or recording for Content ID to match.</span></label>
+                <span class="hint">Natural ambience is non-musical (rain, wind, stream, room tone), generated locally &mdash; no melody or recording for Content ID to match. "AI generated" makes a real, billed Vertex AI call per unique keyword (cached after the first render) using your configured Vertex project -- requires Vertex AI credentials to be set up under AI Provider.</span></label>
             <div class="field" id="customMusicField" style="display:none"><span class="label">Custom music file</span>
                 <div class="flex gap-2 items-center">
                     <input id="customMusicFile" type="file" accept="audio/*" data-setting="false" class="flex-1 text-[12px]">

@@ -834,6 +834,59 @@ def music_bed_gain_db(path, target_dbfs=None):
     return max(-40.0, min(12.0, target - measured))
 
 
+def generate_ai_music(keyword, run_settings):
+    """Text-to-music background bed via Vertex AI's Lyria-002, using the
+    same service-account credentials already configured for Vertex TTS/LLM.
+
+    music_mode == "ai_generated" is opt-in (default stays "nature", which is
+    free and local) -- every call here is a real, billed Vertex API request,
+    so this only fires when the user has explicitly chosen it in Settings.
+
+    Cached per (project, keyword) in DATA_DIR/ai_music_cache: retrying a
+    failed render, or regenerating the same keyword later, shouldn't pay for
+    a fresh generation when the last one is still sitting on disk.
+    """
+    import vertex_auth
+
+    service_account_json = run_settings.get("vertex_service_account_private_key")
+    project_id = run_settings.get("vertex_project_id")
+    location = run_settings.get("vertex_location") or "us-central1"
+    if not service_account_json or not project_id:
+        raise RuntimeError("Vertex AI project/credentials are not configured")
+
+    cache_dir = DATA_DIR / "ai_music_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_key = hashlib.sha256(f"{project_id}|lyria-002|{keyword}".encode()).hexdigest()[:24]
+    cache_path = cache_dir / f"{cache_key}.wav"
+    if cache_path.is_file() and cache_path.stat().st_size > 0:
+        print(f"[MUSIC][AI] Using cached Lyria track for '{keyword}'")
+        return str(cache_path)
+
+    prompt = (
+        f"Calm, pleasant, unobtrusive instrumental background ambience for a "
+        f"'{keyword}' product review video. Soft, airy, subtle texture. "
+        f"No vocals, no melody hook, no drums, nothing distracting -- "
+        f"background bed only, safe to talk over."
+    )
+    token = vertex_auth.get_access_token(service_account_json)
+    url = (
+        f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}"
+        f"/locations/{location}/publishers/google/models/lyria-002:predict"
+    )
+    resp = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"instances": [{"prompt": prompt}], "parameters": {"sample_count": 1}},
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Lyria request failed: {resp.text[:300]}")
+    prediction = resp.json()["predictions"][0]
+    raw_wav = base64.b64decode(prediction["bytesBase64Encoded"])
+    cache_path.write_bytes(raw_wav)
+    return str(cache_path)
+
+
 def build_music_mix_filter(duration, music_gain_db=None):
     """Build a deterministic voice-first mix on one continuous 48 kHz clock.
 
@@ -4528,7 +4581,13 @@ async def main_pipeline():
         selected_music = None
         music_path = None
         music_mode = run_settings.get("music_mode", "nature")
-        if music_mode == "custom":
+        if music_mode == "ai_generated":
+            try:
+                music_path = generate_ai_music(human_kw, run_settings)
+                print(f"[MUSIC] Vertex AI (Lyria) track ready: {music_path}")
+            except Exception as music_error:
+                print(f"[MUSIC][WARN] Vertex AI music generation failed: {music_error}")
+        elif music_mode == "custom":
             # A user-supplied file wins outright -- no library routing, no
             # mood inference. It still goes through the same loudness
             # normalization as a bundled bed, so a commercially mastered

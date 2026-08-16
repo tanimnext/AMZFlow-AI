@@ -13,7 +13,7 @@ import asyncio
 import requests
 
 import catalog_cache
-from voice_config import ACCENTS, GEMINI_TTS_MODELS, GEMINI_TTS_VOICES, VOICE_STYLES
+from voice_config import ACCENTS, GEMINI_TTS_MODELS, GEMINI_TTS_VOICES, VOICE_STYLES, VOICE_STYLE_LABELS
 
 FETCH_TIMEOUT = 12
 
@@ -616,6 +616,9 @@ def director_options() -> dict:
     """Gemini style/accent options, sourced from voice_config instead of being
     re-typed in two templates."""
     return {
-        "styles": [{"id": key, "label": key.replace("_", " ").title()} for key in VOICE_STYLES],
+        "styles": [
+            {"id": key, "label": VOICE_STYLE_LABELS.get(key, key.replace("_", " ").title())}
+            for key in VOICE_STYLES
+        ],
         "accents": [{"id": key, "label": label.title()} for key, label in ACCENTS.items()],
     }
