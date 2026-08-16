@@ -706,6 +706,35 @@ def apply_video_speed(input_path, duration, base_dir, speed=None):
     return output_path, new_duration
 
 
+def _is_light_color(color):
+    """True if `color` reads as light against a dark outline.
+
+    Accepts the two spellings that reach the drawtext filters here --
+    "#RRGGBB" from settings and "0xRRGGBB" after fix_color_ffmpeg -- plus
+    the bare names ffmpeg understands for the handful the code emits
+    directly. Anything unparseable is treated as light, which yields the
+    dark outline that is safe on the light/white text this codebase
+    defaults to.
+    """
+    value = str(color or "").strip().lower()
+    named = {"white": True, "black": False, "yellow": True, "red": False, "blue": False}
+    if value in named:
+        return named[value]
+    if value.startswith("0x"):
+        value = value[2:]
+    elif value.startswith("#"):
+        value = value[1:]
+    if len(value) != 6:
+        return True
+    try:
+        r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return True
+    # Rec. 601 luma -- matches how the eye weights the channels far better
+    # than a plain average (pure green would otherwise read as "dark").
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 140
+
+
 def _caption_points_for_overlay(points, max_points=4, max_chars=52):
     """Trim key points to what fits on ONE line of the caption bar.
 
@@ -746,6 +775,31 @@ def _typewriter_reveal_steps(text, max_steps=26):
         cursor += per_step
     prefixes.append(text)
     return prefixes
+
+
+def segment_caption_points(product, srt_caption_text):
+    """Key-point list for the ON-SCREEN caption bar of one segment.
+
+    Deliberately shares its source with the .srt sidecar. The renderer used
+    to pass the raw product["features"] list straight to the overlay while
+    write_captions_srt() used product_caption_points() (features, falling
+    back to the narration). Whenever a product had no usable feature
+    bullets -- common for a scrape-only product, and now the norm rather
+    than the exception since features are read from the real bullet list
+    instead of any prose lying around the page -- the sidecar showed the
+    narration but the on-screen bar had nothing to type, so the two
+    disagreed and the bar could sit empty while the voice talked.
+    """
+    features = [f for f in (product or {}).get("features") or [] if str(f or "").strip()]
+    if features:
+        return features
+    text = str(srt_caption_text or "").strip()
+    if not text:
+        return []
+    # Split the narration into sentence-sized points so the bar types one
+    # readable line at a time instead of one enormous run-on string.
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    return sentences or [text]
 
 
 def product_caption_points(product, narration_text="", max_points=5, max_chars=70):
@@ -1345,18 +1399,22 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
         box_p_val = round(box_p_val * TEXT_SCALE)
         
         # x='(w-text_w)/2' and y='(h-text_h)/2' are used to center.
-        # Fixed potential sub-pixel coordinate jitter by using floor/round with trunc() if needed, 
+        # Fixed potential sub-pixel coordinate jitter by using floor/round with trunc() if needed,
         # but usually fixed integer mapping is better.
-        # Thumbnail-style pop: an accent-colored outline + drop shadow behind
-        # the text, reusing the same glow color the thumbnail generator uses
-        # (COLOR_THUMB_GLOW), so intro/outro slides read as part of the same
-        # visual identity as the thumbnail instead of plain flat text.
-        accent_color = fix_color_ffmpeg(COLOR_THUMB_GLOW)
+        # Outline colour is derived from the TEXT colour, not from the
+        # thumbnail glow setting. It used to reuse COLOR_THUMB_GLOW for a
+        # shared visual identity with the thumbnail, but that setting
+        # defaults to white -- and a 3px white outline around white outro
+        # text makes the glyphs bloat into each other and turns a sentence
+        # into an unreadable smear (user-reported, with a real frame). An
+        # outline only does its job when it CONTRASTS with the fill, so
+        # light text gets a dark outline and dark text a light one.
+        outline_color = "black" if _is_light_color(text_color) else "white"
         base_style = (
             f"fontfile='{font_path}':fontcolor={text_color}:fontsize={f_size}:"
             f"fix_bounds=1:text_align=center:box={use_box}:boxcolor={box_color}@{opacity}:"
-            f"boxborderw={box_p_val}:borderw=3:bordercolor={accent_color}@0.9:"
-            f"shadowx=3:shadowy=3:shadowcolor=black@0.6"
+            f"boxborderw={box_p_val}:borderw=2:bordercolor={outline_color}@0.85:"
+            f"shadowx=2:shadowy=2:shadowcolor=black@0.5"
         )
         n_lines = len(wrapped_lines)
         line_gap = round(20 * TEXT_SCALE)
@@ -2115,6 +2173,14 @@ _AMAZON_BOILERPLATE_SNIPPETS = (
     "search amazon",
     "choose a language for shopping",
     "go back to filtering menu",
+    "show/hide shortcuts",
+    "keyboard shortcuts",
+    "customer reviews",
+    "add to cart",
+    "back to top",
+    "see more product details",
+    "report an issue with this product",
+    "looking for specific info",
 )
 
 # Amazon's own top-level "Shop by Department" header menu -- these are the
@@ -2168,6 +2234,111 @@ def _looks_like_junk_feature_text(text):
     if lowered.strip(" .!?") in _AMAZON_DEPARTMENT_NAMES:
         return True
     return False
+
+
+def _strip_tags(fragment):
+    """Visible text of an HTML fragment, tags and inline script/style gone."""
+    fragment = re.sub(
+        r'<(script|style)\b[^>]*>.*?</\1>', ' ', fragment, flags=re.DOTALL | re.IGNORECASE
+    )
+    text = re.sub(r'<[^>]+>', ' ', fragment)
+    return re.sub(r'\s+', ' ', html.unescape(text)).strip()
+
+
+def _isolate_container(content, *patterns, window=20000):
+    """Text of the first container whose OPENING tag matches one of `patterns`.
+
+    Amazon's markup is far too irregular for real tag-balancing by regex, so
+    this takes a bounded window from the opening tag and cuts it at the first
+    plausible section boundary after it. That is deliberately conservative:
+    over-cutting loses a bullet, under-cutting drags in the next section --
+    and dragging in the next section is what produced captions reading
+    "Show/Hide shortcuts" and "Beauty & Personal Care".
+    """
+    for pattern in patterns:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if not match:
+            continue
+        chunk = content[match.start(): match.start() + window]
+        # Stop at the start of the next well-known product section so a
+        # short feature list doesn't absorb everything that follows it.
+        end = re.search(
+            r'id="(productDescription|detailBullets|prodDetails|aplus|'
+            r'similarities_feature_div|HLCXComparisonWidget|navFooter|nav-)',
+            chunk[200:],
+            re.IGNORECASE,
+        )
+        if end:
+            chunk = chunk[: 200 + end.start()]
+        return chunk
+    return ""
+
+
+def extract_feature_bullets(content, max_features=10):
+    """Product "About this item" bullets, read from the element that actually
+    holds them rather than from a blind window of surrounding HTML.
+
+    The previous implementation searched for the literal text "About this
+    item", then scanned the next 30,000 characters for anything between a
+    '>' and a '<'. Amazon's real bullet list is a few hundred characters
+    long, so that window ran far past it into the recommendation carousels,
+    the department menu and the keyboard-shortcuts panel -- and every
+    prose-shaped string in there became a "feature". Three unrelated
+    products in one video ended up with the identical scraped features
+    ("Beauty & Personal Care", "Industrial & Scientific", ...), and a
+    caption bar typed out "Show/Hide shortcuts" over the footage.
+
+    Filtering that by denylist was always going to be whack-a-mole: the
+    fix is to stop reading markup that was never the feature list. Amazon
+    keeps these bullets in #feature-bullets (and, for some categories,
+    #productFactsDesktop*) as <span class="a-list-item"> entries, which is
+    what this targets, falling back to the product description prose only
+    if that container genuinely isn't present.
+    """
+    features = []
+
+    def _add(text):
+        text = re.sub(r'\s+', ' ', str(text or '')).strip()
+        if len(text) < 20 or len(text.split()) < 3:
+            return
+        if _looks_like_junk_feature_text(text):
+            return
+        if text in features:
+            return
+        features.append(text)
+
+    bullets_html = _isolate_container(
+        content,
+        r'<div[^>]+id="feature-bullets"',
+        r'<div[^>]+id="productFactsDesktopExpander"',
+        r'<div[^>]+id="productFactsDesktop_feature_div"',
+    )
+    if bullets_html:
+        # The bullets themselves. Amazon marks every one with
+        # class="a-list-item"; nested markup inside a bullet (<b>, <a>) is
+        # flattened by _strip_tags rather than splitting the bullet.
+        for item in re.findall(
+            r'<span[^>]*class="[^"]*a-list-item[^"]*"[^>]*>(.*?)</span>',
+            bullets_html,
+            re.DOTALL | re.IGNORECASE,
+        ):
+            _add(_strip_tags(item))
+        if not features:
+            # Container found but not in the expected <span> shape (layout
+            # test / different category): fall back to its <li> elements.
+            for item in re.findall(r'<li\b[^>]*>(.*?)</li>', bullets_html, re.DOTALL | re.IGNORECASE):
+                _add(_strip_tags(item))
+
+    if not features:
+        desc_html = _isolate_container(
+            content,
+            r'<div[^>]+id="productDescription"',
+            r'<div[^>]+id="bookDescription_feature_div"',
+        )
+        for para in re.findall(r'<p\b[^>]*>(.*?)</p>', desc_html, re.DOTALL | re.IGNORECASE):
+            _add(_strip_tags(para))
+
+    return features[:max_features]
 
 
 # --- Original Functions (Unchanged) ---
@@ -2224,66 +2395,9 @@ def download_assets(asin, base_dir="files_created"):
         print(f"Warning: productTitle not found for ASIN {asin}; page may be a CAPTCHA/interstitial.")
         return None, None, None, None
 
-    # Extract bullet points/features (Aggressive search)
-    print("Searching for product features (Aggressive Mode)...")
-    features = []
-    
-    # 1. Look for 'About this item' text position
-    about_mark = "About this item"
-    pos = content.find(about_mark)
-    if pos == -1:
-        # Fallback to other precise, multi-word section headers only. Bare
-        # single words like "About" or "Features" used to be accepted here
-        # and could match header/nav markup near the top of the page (e.g.
-        # an "About Amazon" link) long before the real feature section --
-        # the 30k-char window from that wrong position then swept up site
-        # chrome like "Select the department you want to search in" and
-        # "use your keyboard up or down arrow keys", which got scraped as
-        # if they were product features.
-        m = re.search(r'(About this item|Product information|Technical Details)', content, re.IGNORECASE)
-        if m: pos = m.start()
-    
-    if pos != -1:
-        print(f"Target section found at position: {pos}")
-        # Capture a very large chunk (30k chars) to ensure we get all features
-        chunk = content[pos : pos + 30000]
-        # Drop entire <script>/<style> blocks first -- their raw text content
-        # (CSS rules, JSON, JS) otherwise sails through the tag-boundary regex
-        # below and ends up looking like a valid "sentence" (e.g. a CSS rule
-        # like "root { -nav-desktop-header-tbg #131921;" was showing up as a
-        # caption because it has 3+ space-separated tokens and no '<'/'>').
-        chunk = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', ' ', chunk, flags=re.DOTALL | re.IGNORECASE)
-
-        # Look for anything between tags that is 20-1000 chars long
-        # This captures data even if Amazon changes <li> to <div> or <span>
-        potential_points = re.findall(r'>(?:\s*)([^<>]{20,1000})(?:\s*)<', chunk, re.DOTALL)
-
-        for p in potential_points:
-            p_clean = html.unescape(p).strip()
-            # Basic validation: must be a sentence, not JS or CSS or Nav items
-            if (len(p_clean) > 20 and
-                not p_clean.startswith(('{', 'if(', '.', 'function', 'var', 'window')) and
-                "Check to see" not in p_clean and
-                "About this item" not in p_clean and
-                not _looks_like_junk_feature_text(p_clean) and
-                p_clean not in features):
-
-                # Check if it has at least 3 words to be a valid feature sentence
-                if len(p_clean.split()) >= 3:
-                    features.append(p_clean)
-        
-        # Limit to top 10 features to keep AI description focused
-        features = features[:10]
-
-    # 2. Final Fallback: If still 0, try the standard span method on the chunk
-    if not features and pos != -1:
-        fallback_matches = re.findall(r'<span[^>]*>(.*?)</span>', chunk, re.DOTALL)
-        for fm in fallback_matches:
-            fm_clean = re.sub(r'<[^>]+>', '', fm).strip()
-            if (len(fm_clean) > 15 and fm_clean not in features and "About" not in fm_clean
-                    and not _looks_like_junk_feature_text(fm_clean)):
-                features.append(html.unescape(fm_clean))
-
+    # Extract bullet points/features
+    print("Searching for product features...")
+    features = extract_feature_bullets(content)
     print(f"Features found: {len(features)}")
 
     # 1. Extract Videos
@@ -4539,14 +4653,18 @@ async def main_pipeline():
                     return create_text_slide_ffmpeg(str(seg['rank']), seg['audio'], os.path.join(base_dir, f"segment_{seg['rank']}_rank.mp4"), bg_path=r_bg, is_rank=True, branding_filters=b_filters)
                 elif seg['type'] == 'product':
                     p = seg['product']
-                    return create_product_segment_ffmpeg(p['video'], p['images'], seg['audios'], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_product.mp4"), branding_filters=b_filters, show_cta=seg.get('show_cta', True), caption_key_points=p.get('features'))
+                    return create_product_segment_ffmpeg(p['video'], p['images'], seg['audios'], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_product.mp4"), branding_filters=b_filters, show_cta=seg.get('show_cta', True), caption_key_points=segment_caption_points(p, seg.get('caption_text')))
                 elif seg['type'] == 'product_part':
                     p = seg['product']
                     # Render a specific part of the product review with current section header
                     # Pass the 'header' from the segment data. tail_pad=1.0 matches the
                     # timeline's `part_dur = audio + 1.0` cinematic buffer (see slide_duration
                     # docstring for why this needs to match on both sides).
-                    return create_product_segment_ffmpeg(p['video'], p['images'], [seg['audio']], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_part_{idx}.mp4"), branding_filters=b_filters, header_text=seg.get('header'), tail_pad=1.0, show_cta=seg.get('show_cta', True), caption_key_points=p.get('features'))
+                    # A single-ASIN part's caption_text IS that part's own
+                    # narration, so this keeps the bar in step with what the
+                    # voice is saying right now rather than repeating the
+                    # product's whole feature list on every section.
+                    return create_product_segment_ffmpeg(p['video'], p['images'], [seg['audio']], p['title'], os.path.join(base_dir, f"segment_{seg['rank']}_part_{idx}.mp4"), branding_filters=b_filters, header_text=seg.get('header'), tail_pad=1.0, show_cta=seg.get('show_cta', True), caption_key_points=segment_caption_points({}, seg.get('caption_text')))
                 elif seg['type'] == 'outro':
                     return create_text_slide_ffmpeg(seg['data'][0], seg['data'][1], os.path.join(base_dir, "segment_final_outro.mp4"), bg_path=seg['data'][2], branding_filters=b_filters, is_outro_single=seg.get('is_outro_single', False))
             except Exception as e:
