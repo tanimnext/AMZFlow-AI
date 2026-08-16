@@ -127,14 +127,12 @@ AI_INTRO_OUTRO = False
 DUAL_VOICE_ENABLED = False
 DUAL_VOICE_SECOND = ""
 CAPTIONS_ENABLED = False
-# Deliberately small: this is multiplied by TEXT_SCALE (1.5) at render
-# time, so 26 lands around 39px on the 1080-tall canvas -- roughly the
-# proportion YouTube's own captions use. It was 40 (=60px), which with
-# unwrapped sentence-long cues covered most of the frame.
+# Sizing/colour for the typed key-point bar under the product title (NOT a
+# subtitle overlay -- see create_product_segment_ffmpeg's caption block).
+# Deliberately small: multiplied by TEXT_SCALE (1.5) at render time, so 26
+# lands around 39px on the 1080-tall canvas.
 CAPTIONS_FONT_SIZE = 26
-CAPTIONS_POSITION = "bottom"
 COLOR_CAPTIONS_TEXT = "#FFE95C"
-COLOR_CAPTIONS_OUTLINE = "#000000"
 COLOR_CAPTIONS_BG = "#000000"
 VAL_CAPTIONS_BG_OPACITY = 0.55
 # Playback rate applied to narration audio only (not the video). TTS engines
@@ -302,8 +300,8 @@ def load_settings_from_external():
     global LLM_FALLBACK_ENABLED, LLM_CHAIN_RAW, LLM_TIMEOUT_SECONDS
     global RANK_SLIDE_SECONDS, NARRATION_SPEED, AI_INTRO_OUTRO
     global DUAL_VOICE_ENABLED, DUAL_VOICE_SECOND
-    global CAPTIONS_ENABLED, CAPTIONS_FONT_SIZE, CAPTIONS_POSITION
-    global COLOR_CAPTIONS_TEXT, COLOR_CAPTIONS_OUTLINE, COLOR_CAPTIONS_BG, VAL_CAPTIONS_BG_OPACITY
+    global CAPTIONS_ENABLED, CAPTIONS_FONT_SIZE
+    global COLOR_CAPTIONS_TEXT, COLOR_CAPTIONS_BG, VAL_CAPTIONS_BG_OPACITY
     global USE_YEAR, USE_BEST, YEAR
     global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, DEEPGRAM_API_KEY, DEEPGRAM_VOICE_ID, DEEPGRAM_MODEL_ID, GOOGLE_TTS_VOICE_ID, GOOGLE_TTS_MONTHLY_CHAR_LIMIT, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
     global GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, GEMINI_VOICE_STYLE
@@ -375,9 +373,7 @@ def load_settings_from_external():
                 DUAL_VOICE_SECOND = str(s.get('dual_voice_second', DUAL_VOICE_SECOND) or '').strip()
                 CAPTIONS_ENABLED = bool(s.get('captions_enabled', CAPTIONS_ENABLED))
                 CAPTIONS_FONT_SIZE = _positive_float(s.get('captions_font_size'), CAPTIONS_FONT_SIZE, 12, 120)
-                CAPTIONS_POSITION = s.get('captions_position', CAPTIONS_POSITION) or 'bottom'
                 COLOR_CAPTIONS_TEXT = s.get('captions_text_color', COLOR_CAPTIONS_TEXT)
-                COLOR_CAPTIONS_OUTLINE = s.get('captions_outline_color', COLOR_CAPTIONS_OUTLINE)
                 COLOR_CAPTIONS_BG = s.get('captions_bg_color', COLOR_CAPTIONS_BG)
                 VAL_CAPTIONS_BG_OPACITY = _positive_float(s.get('captions_bg_opacity'), VAL_CAPTIONS_BG_OPACITY, 0.0, 1.0) if str(s.get('captions_bg_opacity', '')).strip() not in ('', '0') else 0.0
 
@@ -766,98 +762,6 @@ def product_caption_points(product, narration_text="", max_points=5, max_chars=7
         if len(points) >= max_points:
             break
     return " ".join(points) if points else narration_text
-
-
-def _ass_color(hex_color, opacity=1.0):
-    """#RRGGBB -> libass &HAABBGGRR.
-
-    ASS stores colour byte-reversed (blue first) and its alpha byte is
-    INVERTED relative to how anyone thinks about opacity: 00 is fully
-    opaque, FF fully transparent.
-    """
-    value = str(hex_color or "#FFFFFF").strip().lstrip("#")
-    if len(value) != 6 or not re.fullmatch(r"[0-9a-fA-F]{6}", value):
-        value = "FFFFFF"
-    r, g, b = value[0:2], value[2:4], value[4:6]
-    alpha = int(round((1.0 - max(0.0, min(1.0, float(opacity)))) * 255))
-    return f"&H{alpha:02X}{b}{g}{r}".upper()
-
-
-def _subtitles_filter_path(path):
-    """Escape a filesystem path for use inside an ffmpeg filtergraph.
-
-    Windows drive letters are the problem case: a bare "C:\\x.srt" makes
-    ffmpeg read ":" as its own option separator.
-    """
-    escaped = str(path).replace("\\", "/")
-    escaped = escaped.replace(":", r"\:").replace("'", r"\'").replace("[", r"\[").replace("]", r"\]")
-    return escaped
-
-
-def burn_captions(input_path, srt_path, base_dir):
-    """Render captions into the picture.
-
-    Opt-in (CAPTIONS_ENABLED) because it costs a full extra encode pass on
-    an already slow render -- users who only want the .srt sidecar for
-    YouTube should not pay for it. Returns the original path untouched on
-    any failure: losing captions is a far smaller loss than losing the
-    finished video.
-    """
-    if not CAPTIONS_ENABLED or not srt_path or not os.path.exists(srt_path):
-        return input_path
-    if os.path.getsize(srt_path) < 10:
-        return input_path
-
-    alignment = {"bottom": 2, "middle": 5, "top": 8}.get(str(CAPTIONS_POSITION).lower(), 2)
-    font_size = round(CAPTIONS_FONT_SIZE * TEXT_SCALE)
-    style_bits = [
-        f"FontSize={font_size}",
-        f"PrimaryColour={_ass_color(COLOR_CAPTIONS_TEXT)}",
-        f"OutlineColour={_ass_color(COLOR_CAPTIONS_OUTLINE)}",
-        f"Alignment={alignment}",
-        f"MarginV={round(70 * TEXT_SCALE)}",
-        "Bold=1",
-    ]
-    if VAL_CAPTIONS_BG_OPACITY > 0.01:
-        # BorderStyle=3 draws a filled box behind the text instead of an
-        # outline, which stays readable over busy product footage.
-        style_bits += [
-            "BorderStyle=3",
-            f"BackColour={_ass_color(COLOR_CAPTIONS_BG, VAL_CAPTIONS_BG_OPACITY)}",
-            "Outline=0",
-            "Shadow=0",
-        ]
-    else:
-        style_bits += ["BorderStyle=1", "Outline=3", "Shadow=1"]
-
-    output_path = os.path.join(base_dir, "video_captioned.mp4")
-    vf = (
-        f"subtitles='{_subtitles_filter_path(srt_path)}'"
-        f":force_style='{','.join(style_bits)}'"
-    )
-    try:
-        run_ffmpeg([
-            "ffmpeg", "-y", "-i", input_path,
-            "-vf", vf,
-            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
-            output_path,
-        ])
-    except Exception as exc:
-        print(f"[CAPTIONS][WARN] Burn-in failed, shipping without on-screen captions: {exc}")
-        if os.path.exists(output_path):
-            try: os.remove(output_path)
-            except OSError: pass
-        return input_path
-
-    if not os.path.exists(output_path) or os.path.getsize(output_path) < 1000:
-        return input_path
-    if os.path.exists(input_path):
-        try: os.remove(input_path)
-        except OSError: pass
-    print("[CAPTIONS] Burned on-screen captions into the video.")
-    return output_path
 
 
 def write_captions_srt(base_dir, timeline_segments, speed):
@@ -1760,7 +1664,10 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         # overlays. Everything above is lifted by exactly this bar's height
         # so the block still ends where it used to.
         caption_points = _caption_points_for_overlay(caption_key_points) if CAPTIONS_ENABLED else []
-        caption_font_size = round(title_font_size * 0.78)
+        # User-configurable (Settings -> Visual Style -> Key-Point Captions).
+        # A blank/zero size falls back to a sensible ratio of the title so a
+        # never-touched setting doesn't produce a 0px caption.
+        caption_font_size = round(CAPTIONS_FONT_SIZE * S) if CAPTIONS_FONT_SIZE else round(title_font_size * 0.78)
         caption_box_p = round(12 * S)
         caption_gap = round(8 * S)
         caption_h = caption_font_size + (caption_box_p * 2) if caption_points else 0
@@ -1837,6 +1744,9 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         blue_bar_color = fix_color_ffmpeg(COLOR_BLUEBAR)
         cta_txt_color = fix_color_ffmpeg(COLOR_LINK_CHECK_TEXT)
         cta_bg_color = fix_color_ffmpeg(COLOR_LINK_CHECK_BG)
+        caption_text_color = fix_color_ffmpeg(COLOR_CAPTIONS_TEXT)
+        caption_bg_color = fix_color_ffmpeg(COLOR_CAPTIONS_BG)
+        caption_bg_opacity = VAL_CAPTIONS_BG_OPACITY if VAL_CAPTIONS_BG_OPACITY > 0.01 else VAL_PRODUCT_BG_OPACITY
 
         # New overlay design using a separate layer for clipping the reveal effect
         blue_bar_w = round(15 * S)
@@ -1903,8 +1813,8 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
                     step_end = point_end if is_last else step_start + step_dt
                     caption_draws.append(
                         f"drawtext=fontfile='{font_path}':text='{sanitize_text(prefix)}':"
-                        f"fontsize={caption_font_size}:fontcolor={prod_title_color}:"
-                        f"box=1:boxcolor={prod_box_color}@{VAL_PRODUCT_BG_OPACITY}:"
+                        f"fontsize={caption_font_size}:fontcolor={caption_text_color}:"
+                        f"box=1:boxcolor={caption_bg_color}@{caption_bg_opacity}:"
                         f"boxborderw={caption_box_p}:x={txt_layer_x + text_edge_pad}:"
                         f"y='{caption_y}':enable='between(t,{step_start:.3f},{step_end:.3f})'"
                     )

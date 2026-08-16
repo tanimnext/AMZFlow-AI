@@ -316,26 +316,6 @@ class ConclusionTests(unittest.TestCase):
         self.assertIn("price", out.lower())
 
 
-class CaptionStyleTests(unittest.TestCase):
-    def test_ass_colour_is_byte_reversed_with_inverted_alpha(self):
-        # ASS stores colour blue-first and treats 00 as fully OPAQUE.
-        self.assertEqual(avm._ass_color("#FF0000"), "&H000000FF")
-        self.assertEqual(avm._ass_color("#0000FF"), "&H00FF0000")
-        self.assertEqual(avm._ass_color("#FFFFFF", 0.0), "&HFFFFFFFF")
-
-    def test_malformed_colour_falls_back_to_white(self):
-        for bad in ("", None, "nonsense", "#12", "#GGGGGG"):
-            self.assertEqual(avm._ass_color(bad), "&H00FFFFFF")
-
-    def test_windows_drive_letter_is_escaped_for_the_filtergraph(self):
-        # An unescaped "C:" makes ffmpeg parse the drive letter as its own
-        # option separator and the subtitles filter fails to load.
-        out = avm._subtitles_filter_path(r"C:\Users\t\captions.srt")
-        self.assertEqual(out, r"C\:/Users/t/captions.srt")
-
-    def test_posix_path_is_left_usable(self):
-        self.assertEqual(avm._subtitles_filter_path("/Users/t/captions.srt"),
-                         "/Users/t/captions.srt")
 
 
 class DedupeProductsByTitleTests(unittest.TestCase):

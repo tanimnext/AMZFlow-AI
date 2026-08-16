@@ -218,26 +218,16 @@
 
                     <div class="pt-4 space-y-3" style="border-top:1px solid var(--border)">
                         <div class="flex items-center justify-between">
-                            <p class="section-label mb-0">On-Screen Captions</p>
+                            <p class="section-label mb-0">Key-Point Captions</p>
                             <label class="switch"><input type="checkbox" id="captions_enabled"><span class="slider"></span></label>
                         </div>
-                        <p class="hint">Burns the narration into the picture as subtitles. A <span class="mono">captions.srt</span> file is always saved next to the video either way &mdash; turn this on only if you want the text visible in the video itself, since it costs an extra encode pass per render.</p>
-                        <div class="grid grid-cols-2 gap-3">
-                            <label class="field"><span class="label">Font size</span>
-                                <input type="number" id="captions_font_size" min="12" max="120" step="2" placeholder="40"></label>
-                            <label class="field"><span class="label">Position</span>
-                                <select id="captions_position">
-                                    <option value="bottom">Bottom</option>
-                                    <option value="middle">Middle</option>
-                                    <option value="top">Top</option>
-                                </select></label>
-                        </div>
+                        <p class="hint">Types each product's key spec points into a bar directly under the product title, with keystroke sound &mdash; not a subtitle track. Position always matches the title (that's the whole point: same design, stacked). A <span class="mono">captions.srt</span> sidecar with the full narration is always saved next to the video either way.</p>
+                        <label class="field"><span class="label">Font size</span>
+                            <input type="number" id="captions_font_size" min="12" max="120" step="2" placeholder="26"></label>
                         <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Text Color</span><input type="color" id="captions_text_color"></div>
-                        <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Outline Color</span><input type="color" id="captions_outline_color"></div>
                         <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Background Color</span><input type="color" id="captions_bg_color"></div>
                         <label class="field"><span class="label">Background opacity</span>
-                            <input type="range" id="captions_bg_opacity" min="0" max="1" step="0.05">
-                            <span class="hint">0 draws an outline instead of a filled box.</span></label>
+                            <input type="range" id="captions_bg_opacity" min="0" max="1" step="0.05"></label>
                     </div>
 
                     <div class="pt-4" style="border-top:1px solid var(--border)">

@@ -318,7 +318,7 @@ def save_settings(data):
 
 
 SETTINGS_MIGRATION_VERSION_KEY = "settings_migration_version"
-CURRENT_SETTINGS_MIGRATION = 1
+CURRENT_SETTINGS_MIGRATION = 2
 # key -> (superseded shipped default, new shipped default).
 # Only rewritten when the saved value is STILL the old default, i.e. the user
 # never chose it -- they just inherited it. A value they actually picked is
@@ -327,6 +327,17 @@ CURRENT_SETTINGS_MIGRATION = 1
 SUPERSEDED_DEFAULTS = {
     "outro_title_bg_enable": (False, True),
     "outro_title_bg_color": ("#e20390", "#f97316"),
+    # These two are the direct symptom of the missing-key bug above rather
+    # than a changed default: the caption feature shipped, an existing
+    # install's settings.json had no captions_text_color/font_size key yet,
+    # the Settings page's <input type="color"> rendered that as black and
+    # the number input as blank, and the next save persisted exactly that.
+    # Black text is never a real choice on a dark caption background, and a
+    # blank font-size field is never a deliberate one either -- both are
+    # symptoms, not preferences, so they are safe to correct here the same
+    # way as an actually-superseded default.
+    "captions_text_color": ("#000000", "#ffe95c"),
+    "captions_font_size": ("", "26"),
 }
 
 
