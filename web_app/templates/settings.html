@@ -205,11 +205,15 @@
                         <span class="badge badge-brand">Intro Overlay</span>
                         <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">BG Color</span><input type="color" id="intro_overlay_bg_color"></div>
                         <label class="field"><span class="label">Opacity</span><input type="range" id="intro_overlay_opacity" min="0" max="1" step="0.1"></label>
+                        <label class="field"><span class="label">Title font size</span>
+                            <input type="number" id="intro_font_size" min="16" max="140" step="2" placeholder="50"></label>
                     </div>
                     <div class="card card-pad space-y-2">
                         <span class="badge badge-brand">Outro Overlay</span>
                         <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">BG Color</span><input type="color" id="outro_overlay_bg_color"></div>
                         <label class="field"><span class="label">Opacity</span><input type="range" id="outro_overlay_opacity" min="0" max="1" step="0.1"></label>
+                        <label class="field"><span class="label">Title font size</span>
+                            <input type="number" id="outro_font_size" min="16" max="140" step="2" placeholder="50"></label>
                     </div>
                     <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Rank Badge</span><input type="color" id="rank_bg_color"></div>
                     <label class="field"><span class="label">Countdown card duration (seconds)</span>
@@ -222,7 +226,9 @@
                             <label class="switch"><input type="checkbox" id="captions_enabled"><span class="slider"></span></label>
                         </div>
                         <p class="hint">Types each product's key spec points into a bar directly under the product title, with keystroke sound &mdash; not a subtitle track. Position always matches the title (that's the whole point: same design, stacked). A <span class="mono">captions.srt</span> sidecar with the full narration is always saved next to the video either way.</p>
-                        <label class="field"><span class="label">Font size</span>
+                        <label class="field"><span class="label">Product title font size</span>
+                            <input type="number" id="product_title_font_size" min="16" max="140" step="2" placeholder="45"></label>
+                        <label class="field"><span class="label">Caption font size</span>
                             <input type="number" id="captions_font_size" min="12" max="120" step="2" placeholder="26"></label>
                         <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Text Color</span><input type="color" id="captions_text_color"></div>
                         <div class="flex justify-between items-center"><span class="text-[13px]" style="color:var(--text-muted)">Background Color</span><input type="color" id="captions_bg_color"></div>

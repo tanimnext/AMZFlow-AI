@@ -129,12 +129,19 @@ DUAL_VOICE_SECOND = ""
 CAPTIONS_ENABLED = False
 # Sizing/colour for the typed key-point bar under the product title (NOT a
 # subtitle overlay -- see create_product_segment_ffmpeg's caption block).
-# Deliberately small: multiplied by TEXT_SCALE (1.5) at render time, so 26
-# lands around 39px on the 1080-tall canvas.
-CAPTIONS_FONT_SIZE = 26
+# Multiplied by TEXT_SCALE (1.5) at render time, so 32 lands around 48px on
+# the 1080-tall canvas.
+CAPTIONS_FONT_SIZE = 32
 COLOR_CAPTIONS_TEXT = "#FFE95C"
 COLOR_CAPTIONS_BG = "#000000"
 VAL_CAPTIONS_BG_OPACITY = 0.55
+# User overrides for title-style text (Settings -> Visual Style). 0 means
+# "not set" -- falls back to the size the code has always computed (see
+# create_product_segment_ffmpeg's title_font_size and create_text_slide_ffmpeg's
+# f_size), so a never-touched setting doesn't change anyone's existing video.
+PRODUCT_TITLE_FONT_SIZE = 0
+INTRO_FONT_SIZE = 0
+OUTRO_FONT_SIZE = 0
 # Playback rate applied to narration audio only (not the video). TTS engines
 # read at a measured, even pace that sounds sluggish next to how a real
 # review host talks; a small speed-up lands closer to natural without the
@@ -302,6 +309,7 @@ def load_settings_from_external():
     global DUAL_VOICE_ENABLED, DUAL_VOICE_SECOND
     global CAPTIONS_ENABLED, CAPTIONS_FONT_SIZE
     global COLOR_CAPTIONS_TEXT, COLOR_CAPTIONS_BG, VAL_CAPTIONS_BG_OPACITY
+    global PRODUCT_TITLE_FONT_SIZE, INTRO_FONT_SIZE, OUTRO_FONT_SIZE
     global USE_YEAR, USE_BEST, YEAR
     global TTS_SERVICE, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID, ELEVENLABS_MODEL_ID, AI33PRO_API_KEY, AI33PRO_VOICE_ID, AI33PRO_MODEL_ID, CARTESIA_API_KEY, CARTESIA_VOICE_ID, CARTESIA_MODEL_ID, DEEPGRAM_API_KEY, DEEPGRAM_VOICE_ID, DEEPGRAM_MODEL_ID, GOOGLE_TTS_VOICE_ID, GOOGLE_TTS_MONTHLY_CHAR_LIMIT, EDGE_VOICE, EDGE_RATE, EDGE_PITCH
     global GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, GEMINI_VOICE_STYLE
@@ -376,6 +384,12 @@ def load_settings_from_external():
                 COLOR_CAPTIONS_TEXT = s.get('captions_text_color', COLOR_CAPTIONS_TEXT)
                 COLOR_CAPTIONS_BG = s.get('captions_bg_color', COLOR_CAPTIONS_BG)
                 VAL_CAPTIONS_BG_OPACITY = _positive_float(s.get('captions_bg_opacity'), VAL_CAPTIONS_BG_OPACITY, 0.0, 1.0) if str(s.get('captions_bg_opacity', '')).strip() not in ('', '0') else 0.0
+                # 0 (the default) means "not set" -- falls back to the size
+                # the code has always computed. See PRODUCT_TITLE_FONT_SIZE's
+                # module-level comment.
+                PRODUCT_TITLE_FONT_SIZE = _positive_float(s.get('product_title_font_size'), 0, 16, 140)
+                INTRO_FONT_SIZE = _positive_float(s.get('intro_font_size'), 0, 16, 140)
+                OUTRO_FONT_SIZE = _positive_float(s.get('outro_font_size'), 0, 16, 140)
 
                 PARTNER_TAG = s.get('partner_tag', PARTNER_TAG)
                 USE_YEAR = s.get('use_year', USE_YEAR)
@@ -1313,7 +1327,14 @@ def create_text_slide_ffmpeg(text, audio_path, output_path, bg_path=None, is_int
             f_size = 50
             if text_len_for_sizing > 80: f_size = 40
             if text_len_for_sizing > 120: f_size = 35
-        f_size = round(f_size * TEXT_SCALE)
+        user_font_size = INTRO_FONT_SIZE if is_intro else OUTRO_FONT_SIZE
+        if user_font_size:
+            # User override (Settings -> Visual Style -> Intro/Outro title
+            # font size) -- fixed size, replacing the length-based shrink
+            # logic above entirely so the user's choice is predictable.
+            f_size = round(user_font_size * TEXT_SCALE)
+        else:
+            f_size = round(f_size * TEXT_SCALE)
 
         # Build drawtext command - fontfile and text use single quotes, colors do not
         # Padding adjustments:
@@ -1739,6 +1760,10 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
             title_wrap_width = 58
             max_title_lines = 2
             bottom_margin = round(72 * S)
+        if PRODUCT_TITLE_FONT_SIZE:
+            # User override (Settings -> Visual Style -> Product title font
+            # size) -- replaces the shorts/normal split above outright.
+            title_font_size = round(PRODUCT_TITLE_FONT_SIZE * S)
         wrapped_lines = wrap_lines_for_overlay(
             clean_title,
             width=title_wrap_width,
@@ -2092,6 +2117,33 @@ _AMAZON_BOILERPLATE_SNIPPETS = (
     "go back to filtering menu",
 )
 
+# Amazon's own top-level "Shop by Department" header menu -- these are the
+# SAME ~40 links on every Amazon page regardless of product, so a scraped
+# "feature" that is verbatim one of these (once trailing punctuation is
+# stripped) is department-picker nav, not a spec bullet. Caught a real case:
+# three different products in the same video all scraped "Beauty & Personal
+# Care" / "Industrial & Scientific" / "Tools & Home Improvement" as their
+# only "features", which the caption bar then typed out over the footage.
+# Exact match only (not substring) -- unlike the boilerplate snippets above,
+# these are short enough that substring-matching them risks catching a real
+# bullet that happens to mention a department name in passing.
+_AMAZON_DEPARTMENT_NAMES = {
+    "all", "arts & crafts", "automotive", "baby", "beauty & personal care",
+    "books", "boys' fashion", "computers", "deals", "digital music",
+    "electronics", "girls' fashion", "health & household",
+    "home & kitchen", "industrial & scientific", "kindle store",
+    "luggage", "men's fashion", "movies & tv", "music, cds & vinyl",
+    "pet supplies", "prime video", "smart home", "software",
+    "sports & outdoors", "tools & home improvement", "toys & games",
+    "video games", "women's fashion", "amazon devices",
+    "amazon fresh", "appliances", "audible books & originals",
+    "beauty", "clothing, shoes & jewelry", "collectibles & fine art",
+    "computers & accessories", "credit & payment cards", "garden & outdoor",
+    "gift cards", "grocery & gourmet food", "handmade",
+    "health, household & baby care", "office products", "patio, lawn & garden",
+    "premium beauty", "subscribe & save", "vehicles",
+}
+
 
 def _looks_like_junk_feature_text(text):
     """Reject scraped "feature" text that is actually CSS/JS/JSON, not a sentence.
@@ -2112,6 +2164,8 @@ def _looks_like_junk_feature_text(text):
         return True
     lowered = text.lower()
     if any(snippet in lowered for snippet in _AMAZON_BOILERPLATE_SNIPPETS):
+        return True
+    if lowered.strip(" .!?") in _AMAZON_DEPARTMENT_NAMES:
         return True
     return False
 

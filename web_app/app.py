@@ -318,7 +318,7 @@ def save_settings(data):
 
 
 SETTINGS_MIGRATION_VERSION_KEY = "settings_migration_version"
-CURRENT_SETTINGS_MIGRATION = 2
+CURRENT_SETTINGS_MIGRATION = 3
 # key -> (superseded shipped default, new shipped default).
 # Only rewritten when the saved value is STILL the old default, i.e. the user
 # never chose it -- they just inherited it. A value they actually picked is
@@ -337,7 +337,9 @@ SUPERSEDED_DEFAULTS = {
     # symptoms, not preferences, so they are safe to correct here the same
     # way as an actually-superseded default.
     "captions_text_color": ("#000000", "#ffe95c"),
-    "captions_font_size": ("", "26"),
+    # User feedback: the caption bar read too small. Either "" (an install
+    # that never got past migration 2) or "26" (one that did) -> "32".
+    "captions_font_size": (("", "26"), "32"),
 }
 
 
@@ -357,7 +359,13 @@ def migrate_superseded_defaults():
 
     changed = {}
     for key, (old_default, new_default) in SUPERSEDED_DEFAULTS.items():
-        if key in saved and saved[key] == old_default:
+        if key not in saved:
+            continue
+        # old_default is usually a single value; a (val1, val2, ...) tuple
+        # covers a key that's been superseded more than once, so an install
+        # sitting on any prior default still gets corrected in one pass.
+        old_defaults = old_default if isinstance(old_default, tuple) else (old_default,)
+        if saved[key] in old_defaults:
             changed[key] = new_default
     saved.update(changed)
     saved[SETTINGS_MIGRATION_VERSION_KEY] = CURRENT_SETTINGS_MIGRATION
