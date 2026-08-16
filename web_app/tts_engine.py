@@ -489,14 +489,15 @@ def synth_vertex_gemini(text, output_path, config, ffmpeg_bin="ffmpeg"):
 
     service_account_json = config.get("vertex_service_account_private_key")
     project_id = config.get("vertex_project_id")
-    location = config.get("vertex_location") or "us-central1"
-    try:
-        token = vertex_auth.get_access_token(service_account_json)
-        model = _resolve_model("vertex_gemini", config)
-        api_version = "v1beta1" if "preview" in model else "v1"
-        url = vertex_auth.generate_content_url(project_id, location, model, api_version=api_version)
-    except ValueError as exc:
-        raise TTSError(str(exc), "vertex_gemini") from exc
+    configured_location = config.get("vertex_location") or "us-central1"
+    # RESOURCE_EXHAUSTED (429) on Vertex is almost always a per-region quota,
+    # not a project-wide one -- retrying the identical request against a
+    # different region/the pooled "global" endpoint routinely succeeds where
+    # hammering the same region would just 429 again. Try the user's chosen
+    # region first (respects their setting/latency choice), then fall back.
+    locations_to_try = list(dict.fromkeys(
+        [configured_location, "global", "us-central1"]
+    ))
 
     voice_config = normalize_gemini_tts_settings(config)
     prompt = build_gemini_tts_prompt(text, config)
@@ -511,14 +512,33 @@ def synth_vertex_gemini(text, output_path, config, ffmpeg_bin="ffmpeg"):
             },
         },
     }
-    resp = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json=body,
-        timeout=GEMINI_TIMEOUT,
-    )
-    if resp.status_code != 200:
-        raise TTSError(f"Vertex AI TTS error: {resp.text[:300]}", "vertex_gemini")
+
+    try:
+        token = vertex_auth.get_access_token(service_account_json)
+        model = _resolve_model("vertex_gemini", config)
+        api_version = "v1beta1" if "preview" in model else "v1"
+    except ValueError as exc:
+        raise TTSError(str(exc), "vertex_gemini") from exc
+
+    resp = None
+    last = ""
+    for loc in locations_to_try:
+        url = vertex_auth.generate_content_url(project_id, loc, model, api_version=api_version)
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=body,
+            timeout=GEMINI_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            break
+        last = resp.text[:300]
+        print(f"[VERTEX TTS] {loc} failed ({resp.status_code}): {last}")
+        if resp.status_code not in (429, 500, 502, 503, 504):
+            break
+
+    if resp is None or resp.status_code != 200:
+        raise TTSError(f"Vertex AI TTS error: {last}", "vertex_gemini")
     try:
         inline = resp.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
         pcm_bytes = base64.b64decode(inline["data"])

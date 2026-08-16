@@ -1963,6 +1963,31 @@ def create_product_segment_ffmpeg(video_path, image_paths, audio_paths, title, o
         if badge_path and os.path.exists(badge_path): os.remove(badge_path)
         return None
 
+_CSS_CODE_PATTERN = re.compile(
+    r'[{};]|--[a-zA-Z][\w-]*\s*:|:\s*root\b|^\s*[.#@][\w-]|^[a-zA-Z-]+\s*:\s*[\w#]',
+)
+
+
+def _looks_like_code_or_css(text):
+    """Reject scraped "feature" text that is actually CSS/JS/JSON, not a sentence.
+
+    The aggressive feature scraper grabs any text sitting between '>' and '<'
+    in a chunk of raw HTML; if that chunk still contains inline <style>/<script>
+    text (or the regex catches a stray declaration block), the result reads
+    like "root { -nav-desktop-header-tbg #131921;" -- syntactically a "sentence"
+    (3+ space-separated tokens, no angle brackets) but never something we want
+    narrated or typed onto a caption.
+    """
+    if _CSS_CODE_PATTERN.search(text):
+        return True
+    # Real feature bullets are prose: mostly letters/spaces. Code/CSS lines
+    # skew heavy on punctuation/symbols relative to letters.
+    letters = sum(1 for c in text if c.isalpha())
+    if letters < len(text) * 0.55:
+        return True
+    return False
+
+
 # --- Original Functions (Unchanged) ---
 
 def download_assets(asin, base_dir="files_created"):
@@ -2033,20 +2058,27 @@ def download_assets(asin, base_dir="files_created"):
         print(f"Target section found at position: {pos}")
         # Capture a very large chunk (30k chars) to ensure we get all features
         chunk = content[pos : pos + 30000]
-        
+        # Drop entire <script>/<style> blocks first -- their raw text content
+        # (CSS rules, JSON, JS) otherwise sails through the tag-boundary regex
+        # below and ends up looking like a valid "sentence" (e.g. a CSS rule
+        # like "root { -nav-desktop-header-tbg #131921;" was showing up as a
+        # caption because it has 3+ space-separated tokens and no '<'/'>').
+        chunk = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', ' ', chunk, flags=re.DOTALL | re.IGNORECASE)
+
         # Look for anything between tags that is 20-1000 chars long
         # This captures data even if Amazon changes <li> to <div> or <span>
         potential_points = re.findall(r'>(?:\s*)([^<>]{20,1000})(?:\s*)<', chunk, re.DOTALL)
-        
+
         for p in potential_points:
             p_clean = html.unescape(p).strip()
             # Basic validation: must be a sentence, not JS or CSS or Nav items
-            if (len(p_clean) > 20 and 
+            if (len(p_clean) > 20 and
                 not p_clean.startswith(('{', 'if(', '.', 'function', 'var', 'window')) and
                 "Check to see" not in p_clean and
                 "About this item" not in p_clean and
+                not _looks_like_code_or_css(p_clean) and
                 p_clean not in features):
-                
+
                 # Check if it has at least 3 words to be a valid feature sentence
                 if len(p_clean.split()) >= 3:
                     features.append(p_clean)
@@ -2059,7 +2091,8 @@ def download_assets(asin, base_dir="files_created"):
         fallback_matches = re.findall(r'<span[^>]*>(.*?)</span>', chunk, re.DOTALL)
         for fm in fallback_matches:
             fm_clean = re.sub(r'<[^>]+>', '', fm).strip()
-            if len(fm_clean) > 15 and fm_clean not in features and "About" not in fm_clean:
+            if (len(fm_clean) > 15 and fm_clean not in features and "About" not in fm_clean
+                    and not _looks_like_code_or_css(fm_clean)):
                 features.append(html.unescape(fm_clean))
 
     print(f"Features found: {len(features)}")
@@ -4622,8 +4655,10 @@ async def main_pipeline():
                 apply_seo_metadata(final_video_path, human_kw, meta['tags'], meta['title'])
                 keyword_video_path = os.path.join(base_dir, f"{keyword}.mp4")
                 if os.path.abspath(final_video_path) != os.path.abspath(keyword_video_path):
-                    if os.path.exists(keyword_video_path):
-                        os.remove(keyword_video_path)
+                    # os.replace() is atomic on POSIX/Windows and overwrites
+                    # any existing target itself -- a manual os.remove() first
+                    # only opens a window where the served path briefly
+                    # doesn't exist at all (a 404 for anyone watching).
                     os.replace(final_video_path, keyword_video_path)
 
             keep_files = {"Thumbnail.jpg", f"{keyword}.mp4", "youtube.txt", "captions.srt"}

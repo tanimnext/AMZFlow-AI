@@ -2131,7 +2131,17 @@ def get_video(keyword):
 
     video_file = _find_video_file(keyword, k_path)
     if video_file:
-        return send_from_directory(k_path, video_file, conditional=True)
+        resp = send_from_directory(k_path, video_file, conditional=True)
+        # The served filename is stable (<keyword>.mp4, overwritten in place
+        # whenever this project is re-rendered), but browsers cache 206
+        # Partial Content responses per URL+Range unless told not to. Without
+        # this header, scrubbing/reopening a video after a re-render could
+        # splice cached byte ranges from the OLD file with freshly-fetched
+        # ranges from the NEW one -- corrupted/garbled playback (including
+        # stray text from a previous render's keyword) that looks like a
+        # rendering bug but is really a stale HTTP cache.
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     return "Not Found", 404
 
